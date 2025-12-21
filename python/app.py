@@ -16,6 +16,15 @@ import subprocess
 from Bio.PDB import PDBParser, PDBList
 import logging
 from structure_preparation import prepare_structure, parse_structure_info
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from Fill_missing_residues import (
+    get_pdb_id_from_pdb_file,
+    detect_missing_residues,
+    get_chain_sequences,
+    run_esmfold,
+    rebuild_pdb_with_esmfold
+)
 
 app = Flask(__name__, 
             template_folder='../html',
@@ -922,8 +931,14 @@ def prepare_structure_endpoint():
         pdb_content = data.get('pdb_content', '')
         options = data.get('options', {})
         
-        if not pdb_content:
-            return jsonify({'error': 'No PDB content provided'}), 400
+        # Check if completed structure exists and use it instead
+        complete_structure_path = OUTPUT_DIR / "0_complete_structure.pdb"
+        if complete_structure_path.exists():
+            logger.info("Using completed structure (0_complete_structure.pdb) for preparation")
+            with open(complete_structure_path, 'r') as f:
+                pdb_content = f.read()
+        elif not pdb_content:
+            return jsonify({'error': 'No PDB content provided and no completed structure found'}), 400
         
         # Prepare structure
         result = prepare_structure(pdb_content, options)
@@ -1497,6 +1512,32 @@ def clean_output():
         print(f"DEBUG: Error in clean-output: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/save-pdb-file', methods=['POST'])
+def save_pdb_file():
+    """Save PDB file to output directory"""
+    try:
+        data = request.get_json()
+        pdb_content = data.get('pdb_content', '')
+        filename = data.get('filename', 'input.pdb')
+        
+        if not pdb_content:
+            return jsonify({'success': False, 'error': 'No PDB content provided'}), 400
+        
+        # Save to output directory as 0_original_input.pdb
+        output_file = OUTPUT_DIR / "0_original_input.pdb"
+        with open(output_file, 'w') as f:
+            f.write(pdb_content)
+        
+        logger.info(f"Saved PDB file to {output_file}")
+        return jsonify({
+            'success': True,
+            'message': f'PDB file saved successfully',
+            'file_path': str(output_file)
+        })
+    except Exception as e:
+        logger.error(f"Error saving PDB file: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/download-output-zip', methods=['GET'])
 def download_output_zip():
     """Create a ZIP of the output folder and return it for download"""
@@ -1685,6 +1726,270 @@ def generate_ff_parameters():
         return jsonify({
             'success': False,
             'error': f'Failed to generate force field parameters: {str(e)}'
+        }), 500
+
+@app.route('/api/detect-missing-residues', methods=['POST'])
+def detect_missing_residues_endpoint():
+    """Detect missing residues in the loaded PDB structure"""
+    try:
+        # Check if original input file exists
+        original_pdb_path = OUTPUT_DIR / "0_original_input.pdb"
+        if not original_pdb_path.exists():
+            return jsonify({
+                'success': False,
+                'error': 'No PDB file loaded. Please load a PDB file first.'
+            }), 400
+        
+        # Get PDB ID from the file
+        try:
+            pdb_id = get_pdb_id_from_pdb_file(str(original_pdb_path))
+        except ValueError as e:
+            return jsonify({
+                'success': False,
+                'error': f'Could not determine PDB ID: {str(e)}'
+            }), 400
+        
+        # Detect missing residues
+        missing = detect_missing_residues(pdb_id)
+        
+        # Get chain sequences
+        chain_sequences = get_chain_sequences(pdb_id)
+        
+        # Find chains with missing residues that have sequences available
+        chains_with_missing = {
+            chain: chain_sequences[chain]
+            for chain in missing
+            if chain in chain_sequences
+        }
+        
+        # Format missing residues info for display
+        missing_info = {}
+        for chain, missing_list in missing.items():
+            missing_info[chain] = {
+                'count': len(missing_list),
+                'residues': missing_list
+            }
+        
+        return jsonify({
+            'success': True,
+            'pdb_id': pdb_id,
+            'missing_residues': missing_info,
+            'chains_with_missing': list(chains_with_missing.keys()),
+            'chain_sequences': chain_sequences
+        })
+        
+    except Exception as e:
+        logger.error(f"Error detecting missing residues: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to detect missing residues: {str(e)}'
+        }), 500
+
+@app.route('/api/build-completed-structure', methods=['POST'])
+def build_completed_structure_endpoint():
+    """Build completed structure using ESMFold for selected chains"""
+    try:
+        data = request.get_json()
+        selected_chains = data.get('selected_chains', [])
+        
+        if not selected_chains:
+            return jsonify({
+                'success': False,
+                'error': 'No chains selected for completion'
+            }), 400
+        
+        # Check if original input file exists
+        original_pdb_path = OUTPUT_DIR / "0_original_input.pdb"
+        if not original_pdb_path.exists():
+            return jsonify({
+                'success': False,
+                'error': 'No PDB file loaded. Please load a PDB file first.'
+            }), 400
+        
+        # Get PDB ID
+        try:
+            pdb_id = get_pdb_id_from_pdb_file(str(original_pdb_path))
+        except ValueError as e:
+            return jsonify({
+                'success': False,
+                'error': f'Could not determine PDB ID: {str(e)}'
+            }), 400
+        
+        # Get chain sequences
+        chain_sequences = get_chain_sequences(pdb_id)
+        
+        # Verify selected chains have sequences
+        chains_to_process = []
+        for chain in selected_chains:
+            if chain in chain_sequences:
+                chains_to_process.append(chain)
+            else:
+                logger.warning(f"Chain {chain} not found in chain sequences")
+        
+        if not chains_to_process:
+            return jsonify({
+                'success': False,
+                'error': 'None of the selected chains have sequences available'
+            }), 400
+        
+        # Run ESMFold for each selected chain
+        esmfold_results = {}
+        for chain in chains_to_process:
+            logger.info(f"Running ESMFold for chain {chain}")
+            seq = chain_sequences[chain]
+            try:
+                pdb_text = run_esmfold(seq)
+                esmfold_results[chain] = pdb_text
+                
+                # Save each chain's ESMFold result
+                esm_pdb_filename = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold.pdb"
+                with open(esm_pdb_filename, 'w') as f:
+                    f.write(pdb_text)
+                logger.info(f"Saved ESMFold result for chain {chain} to {esm_pdb_filename}")
+            except Exception as e:
+                logger.error(f"Error running ESMFold for chain {chain}: {str(e)}")
+                return jsonify({
+                    'success': False,
+                    'error': f'ESMFold failed for chain {chain}: {str(e)}'
+                }), 500
+        
+        # Rebuild PDB using PyMOL
+        output_pdb = OUTPUT_DIR / "0_complete_structure.pdb"
+        try:
+            # Use subprocess to run PyMOL in a separate process to avoid conflicts
+            import tempfile
+            import os
+            
+            # Create a standalone script that runs PyMOL operations
+            script_content = f"""#!/usr/bin/env python3
+import sys
+import os
+
+# Add parent directory to path
+sys.path.insert(0, r'{str(Path(__file__).parent.parent)}')
+
+# Change to output directory
+os.chdir(r'{str(OUTPUT_DIR)}')
+
+# Import and run rebuild
+from Fill_missing_residues import rebuild_pdb_with_esmfold
+
+try:
+    rebuild_pdb_with_esmfold(
+        r'{pdb_id}',
+        {repr(chains_to_process)},
+        output_pdb=r'{output_pdb.name}',
+        original_pdb_path=r'{Path(original_pdb_path).name}'
+    )
+    print("SUCCESS: Rebuild completed")
+except Exception as e:
+    print(f"ERROR: {{e}}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+"""
+            
+            # Write script to temporary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as script_file:
+                script_file.write(script_content)
+                script_path = script_file.name
+            
+            try:
+                # Make script executable
+                os.chmod(script_path, 0o755)
+                
+                # Run script in subprocess
+                result = subprocess.run(
+                    [sys.executable, script_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    cwd=str(OUTPUT_DIR)
+                )
+                
+                if result.returncode != 0:
+                    error_msg = result.stderr or result.stdout
+                    logger.error(f"PyMOL rebuild failed: {error_msg}")
+                    # Check if it's a PyMOL initialization issue
+                    if "pymol" in error_msg.lower() or "import" in error_msg.lower():
+                        raise Exception(f"PyMOL initialization failed. Make sure PyMOL is installed and accessible. Error: {error_msg}")
+                    raise Exception(f"Rebuild failed: {error_msg}")
+                
+                if "ERROR:" in result.stdout:
+                    error_line = [line for line in result.stdout.split('\\n') if 'ERROR:' in line]
+                    if error_line:
+                        raise Exception(error_line[0].replace('ERROR:', '').strip())
+                
+                if not output_pdb.exists():
+                    raise Exception("Output file was not created")
+                
+                logger.info(f"Completed structure saved to {output_pdb}")
+                
+            finally:
+                # Clean up temporary script
+                try:
+                    os.unlink(script_path)
+                except:
+                    pass
+                    
+        except subprocess.TimeoutExpired:
+            logger.error("PyMOL rebuild timed out after 5 minutes")
+            return jsonify({
+                'success': False,
+                'error': 'PyMOL rebuild timed out. The structure might be too large. Please try again.'
+            }), 500
+        except Exception as e:
+            logger.error(f"Error rebuilding PDB: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({
+                'success': False,
+                'error': f'Failed to rebuild structure: {str(e)}'
+            }), 500
+        
+        # Read the completed structure
+        with open(output_pdb, 'r') as f:
+            completed_content = f.read()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully completed structure for chains: {", ".join(chains_to_process)}',
+            'completed_chains': chains_to_process,
+            'completed_structure': completed_content
+        })
+        
+    except Exception as e:
+        logger.error(f"Error building completed structure: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to build completed structure: {str(e)}'
+        }), 500
+
+@app.route('/api/get-completed-structure', methods=['GET'])
+def get_completed_structure():
+    """Get the completed structure PDB file if it exists"""
+    try:
+        completed_pdb_path = OUTPUT_DIR / "0_complete_structure.pdb"
+        if not completed_pdb_path.exists():
+            return jsonify({
+                'success': False,
+                'exists': False,
+                'error': 'Completed structure not found'
+            }), 404
+        
+        with open(completed_pdb_path, 'r') as f:
+            content = f.read()
+        
+        return jsonify({
+            'success': True,
+            'exists': True,
+            'content': content
+        })
+    except Exception as e:
+        logger.error(f"Error reading completed structure: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 500
 
 if __name__ == '__main__':

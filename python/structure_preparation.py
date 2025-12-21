@@ -8,6 +8,9 @@ import os
 import subprocess
 import sys
 import shutil
+import logging
+
+logger = logging.getLogger(__name__)
 
 def run_command(cmd, description=""):
     """Run a command and return success status"""
@@ -341,7 +344,17 @@ def prepare_structure(pdb_content, options, output_dir="output"):
         os.makedirs(output_dir, exist_ok=True)
         
         # Define all file paths in output directory
-        input_file = os.path.join(output_dir, "0_original_input.pdb")
+        # Use completed structure if available, otherwise use original input
+        complete_structure_file = os.path.join(output_dir, "0_complete_structure.pdb")
+        original_input_file = os.path.join(output_dir, "0_original_input.pdb")
+        
+        if os.path.exists(complete_structure_file):
+            input_file = complete_structure_file
+            logger.info("Using completed structure (0_complete_structure.pdb) as input")
+        else:
+            input_file = original_input_file
+            logger.info("Using original input (0_original_input.pdb) as input")
+        
         user_chain_file = os.path.join(output_dir, "0_user_chain_selected.pdb")
         protein_file = os.path.join(output_dir, "1_protein_no_hydrogens.pdb")
         protein_capped_file = os.path.join(output_dir, "2_protein_with_caps.pdb")
@@ -349,10 +362,22 @@ def prepare_structure(pdb_content, options, output_dir="output"):
         ligand_corrected_file = os.path.join(output_dir, "4_ligands_corrected.pdb")
         tleap_ready_file = os.path.join(output_dir, "tleap_ready.pdb")
         
-        # Step 0: Save original input for reference
-        print("Step 0: Saving original input...")
-        with open(input_file, 'w') as f:
-            f.write(pdb_content)
+        # Step 0: Save original input for reference (only if using original input)
+        # If using completed structure, we don't overwrite it
+        if input_file == original_input_file:
+            print("Step 0: Saving original input...")
+            with open(input_file, 'w') as f:
+                f.write(pdb_content)
+        else:
+            # If using completed structure, read it instead of using pdb_content
+            print("Step 0: Using completed structure as input...")
+            with open(input_file, 'r') as f:
+                pdb_content = f.read()
+            # Also save a reference to original input if it doesn't exist
+            if not os.path.exists(original_input_file):
+                print("Step 0: Saving reference to original input...")
+                with open(original_input_file, 'w') as f:
+                    f.write(pdb_content)
         
         # Step 0.5: Extract user-selected chains and ligands
         selected_chains = options.get('selected_chains', [])

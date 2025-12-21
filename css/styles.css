@@ -398,6 +398,32 @@ body {
     margin-top: 1rem;
 }
 
+/* Structure comparison container - force side by side and centered */
+.structure-comparison-container {
+    display: flex !important;
+    flex-direction: row !important;
+    width: 100% !important;
+    max-width: 1400px !important;
+    gap: 20px !important;
+    margin: 0 auto !important;
+    justify-content: center !important;
+}
+
+.structure-comparison-container .comparison-viewer {
+    flex: 0 1 48% !important;
+    min-width: 450px !important;
+    max-width: 48% !important;
+}
+
+/* Override preview-content for comparison view */
+#completed-structure-preview .preview-content {
+    display: flex !important;
+    justify-content: center !important;
+    width: 100% !important;
+    padding: 0 !important;
+    grid-template-columns: none !important;
+}
+
 .protein-info p {
     margin: 0.5rem 0;
     font-size: 1rem;

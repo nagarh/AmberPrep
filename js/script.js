@@ -5,16 +5,49 @@ class MDSimulationPipeline {
     constructor() {
         this.currentProtein = null;
         this.preparedProtein = null;
+        this.completedProtein = null;
+        this.missingResiduesInfo = null;
+        this.missingResiduesPdbId = null;
         this.simulationParams = {};
         this.generatedFiles = {};
         this.nglStage = null;
         this.preparedNglStage = null;
+        this.completedNglStage = null;
+        this.originalNglStage = null;
         this.currentRepresentation = 'cartoon';
         this.preparedRepresentation = 'cartoon';
+        this.completedRepresentation = 'cartoon';
+        this.originalRepresentation = 'cartoon';
         this.isSpinning = false;
         this.preparedIsSpinning = false;
+        this.completedIsSpinning = false;
+        this.originalIsSpinning = false;
         this.currentTabIndex = 0;
-        this.tabOrder = ['protein-loading', 'structure-prep', 'simulation-params', 'simulation-steps', 'file-generation'];
+        this.tabOrder = ['protein-loading', 'fill-missing', 'structure-prep', 'simulation-params', 'simulation-steps', 'file-generation'];
+        // Consistent chain color palette - same colors for same chain IDs throughout
+        this.chainColorPalette = [
+            '#1f77b4', // blue
+            '#ff7f0e', // orange
+            '#2ca02c', // green
+            '#d62728', // red
+            '#9467bd', // purple
+            '#8c564b', // brown
+            '#e377c2', // pink
+            '#7f7f7f', // gray
+            '#bcbd22', // olive
+            '#17becf', // cyan
+            '#aec7e8', // light blue
+            '#ffbb78', // light orange
+            '#98df8a', // light green
+            '#ff9896', // light red
+            '#c5b0d5', // light purple
+            '#c49c94', // light brown
+            '#f7b6d3', // light pink
+            '#c7c7c7', // light gray
+            '#dbdb8d', // light olive
+            '#9edae5'  // light cyan
+        ];
+        this.chainColorMap = {}; // Will store chain ID -> color mapping
         this.init();
         this.initializeTooltips();
     }
@@ -83,6 +116,24 @@ class MDSimulationPipeline {
 
         // PDB fetch
         document.getElementById('fetch-pdb').addEventListener('click', () => this.fetchPDB());
+
+        // Missing residues analysis
+        const detectMissingBtn = document.getElementById('detect-missing-residues');
+        if (detectMissingBtn) {
+            detectMissingBtn.addEventListener('click', () => this.detectMissingResidues());
+        }
+        const buildCompleteBtn = document.getElementById('build-complete-structure');
+        if (buildCompleteBtn) {
+            buildCompleteBtn.addEventListener('click', () => this.buildCompletedStructure());
+        }
+        const previewCompletedBtn = document.getElementById('preview-completed-structure');
+        if (previewCompletedBtn) {
+            previewCompletedBtn.addEventListener('click', () => this.previewCompletedStructure());
+        }
+        const downloadCompletedBtn = document.getElementById('download-completed-structure');
+        if (downloadCompletedBtn) {
+            downloadCompletedBtn.addEventListener('click', () => this.downloadCompletedStructure());
+        }
 
         // File generation
         document.getElementById('generate-files').addEventListener('click', () => this.generateAllFiles());
@@ -306,14 +357,36 @@ class MDSimulationPipeline {
     }
 
     async parsePDBFile(content, filename) {
+        return this._parsePDBFileInternal(content, filename, true);
+    }
+
+    async _parsePDBFileInternal(content, filename, cleanOutput = false) {
         try {
-            // Clean output folder when new PDB is loaded
-            try {
-                await fetch('/api/clean-output', { method: 'POST' });
-            } catch (error) {
-                console.log('Could not clean output folder:', error);
+            // Clean output folder when new PDB is loaded (only if requested)
+            if (cleanOutput) {
+                try {
+                    await fetch('/api/clean-output', { method: 'POST' });
+                } catch (error) {
+                    console.log('Could not clean output folder:', error);
+                }
             }
             
+            // Save the PDB file to output directory for backend processing
+            try {
+                await fetch('/api/save-pdb-file', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        pdb_content: content,
+                        filename: filename
+                    })
+                });
+            } catch (error) {
+                console.log('Could not save PDB file to output directory:', error);
+            }
+
             const lines = content.split('\n');
             let atomCount = 0;
             let chains = new Set();
@@ -461,6 +534,9 @@ class MDSimulationPipeline {
         document.getElementById('ligand-info').textContent = this.currentProtein.ligandInfo;
         document.getElementById('hetatm-count').textContent = this.currentProtein.hetatoms.toLocaleString();
 
+        // Build consistent chain color mapping based on chain IDs from Step 1
+        this.buildChainColorMap(this.currentProtein.chains);
+
         document.getElementById('protein-preview').style.display = 'block';
         
         // Load 3D visualization
@@ -468,6 +544,17 @@ class MDSimulationPipeline {
 
         // Also refresh chain/ligand lists when protein info is displayed
         this.renderChainAndLigandSelections();
+    }
+
+    buildChainColorMap(chains) {
+        // Create a consistent mapping of chain IDs to colors
+        // Sort chains to ensure consistent ordering
+        const sortedChains = [...chains].sort();
+        this.chainColorMap = {};
+        sortedChains.forEach((chain, index) => {
+            this.chainColorMap[chain] = this.chainColorPalette[index % this.chainColorPalette.length];
+        });
+        console.log('Chain color map built:', this.chainColorMap);
     }
 
     async fetchPDB() {
@@ -1441,12 +1528,35 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 defaultRepresentation: false
             });
 
-            // Add cartoon representation for protein with chain-based colors
-            component.addRepresentation("cartoon", {
-                sele: "protein",
-                colorScheme: "chainname",
-                opacity: 0.9
-            });
+            // Add cartoon representation for each chain with consistent colors
+            // This ensures each chain gets the same color as in Step 1
+            // Use chains from parsed protein data (more reliable than structure API)
+            const structureChains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                // Add representation for each chain that exists in the structure
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        component.addRepresentation("cartoon", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.9
+                        });
+                    }
+                });
+            } else {
+                // Fallback: use chainid if color map not available
+                component.addRepresentation("cartoon", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.9
+                });
+            }
+            
+            // Apply consistent chain colors after representation is added (backup)
+            setTimeout(() => {
+                this.applyConsistentChainColors(component);
+            }, 500);
 
             // Add ball and stick for water molecules
             if (this.currentProtein.waterMolecules > 0) {
@@ -1516,11 +1626,26 @@ echo "Analysis completed! Results saved in analysis/ directory"
             document.getElementById('style-text').textContent = 'Ball & Stick';
         } else if (this.currentRepresentation === 'ball+stick') {
             // Switch to surface (protein only) + ball&stick for others
-            component.addRepresentation("surface", {
-                sele: "protein",
-                colorScheme: "chainname",
-                opacity: 0.7
-            });
+            // Use consistent chain colors
+            // Use chains from parsed protein data (more reliable than structure API)
+            const structureChains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        component.addRepresentation("surface", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.7
+                        });
+                    }
+                });
+            } else {
+                component.addRepresentation("surface", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.7
+                });
+            }
 
             // Add ball and stick for water molecules
             if (this.currentProtein.waterMolecules > 0) {
@@ -1885,12 +2010,35 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 defaultRepresentation: false
             });
 
-            // Add cartoon representation for protein with chain-based colors
-            component.addRepresentation("cartoon", {
-                sele: "protein",
-                colorScheme: "chainname",
-                opacity: 0.9
-            });
+            // Add cartoon representation for each chain with consistent colors
+            // This ensures each chain gets the same color as in Step 1
+            // Use chains from parsed protein data (more reliable than structure API)
+            const structureChains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                // Add representation for each chain that exists in the structure
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        component.addRepresentation("cartoon", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.9
+                        });
+                    }
+                });
+            } else {
+                // Fallback: use chainid if color map not available
+                component.addRepresentation("cartoon", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.9
+                });
+            }
+            
+            // Apply consistent chain colors after representation is added (backup)
+            setTimeout(() => {
+                this.applyConsistentChainColors(component);
+            }, 500);
 
             // Add ball and stick for ligands (if any) - check for HETATM records
             component.addRepresentation("ball+stick", {
@@ -1938,19 +2086,34 @@ echo "Analysis completed! Results saved in analysis/ directory"
             this.preparedRepresentation = 'ball+stick';
             document.getElementById('prepared-style-text').textContent = 'Ball & Stick';
         } else if (this.preparedRepresentation === 'ball+stick') {
-            // Switch to surface
-            component.addRepresentation("surface", {
-                sele: "protein",
-                colorScheme: "chainname",
-                opacity: 0.7
-            });
+            // Switch to surface with consistent chain colors
+            // Use chains from parsed protein data (more reliable than structure API)
+            const structureChains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        component.addRepresentation("surface", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.7
+                        });
+                    }
+                });
+            } else {
+                component.addRepresentation("surface", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.7
+                });
+            }
             this.preparedRepresentation = 'surface';
             document.getElementById('prepared-style-text').textContent = 'Surface';
         } else {
             // Switch back to cartoon
+            const chainColorFunc = this.getChainColorScheme(component);
             component.addRepresentation("cartoon", {
                 sele: "protein",
-                colorScheme: "chainname",
+                colorScheme: chainColorFunc,
                 opacity: 0.8
             });
 
@@ -1973,6 +2136,583 @@ echo "Analysis completed! Results saved in analysis/ directory"
 
         this.preparedIsSpinning = !this.preparedIsSpinning;
         this.preparedNglStage.setSpin(this.preparedIsSpinning);
+    }
+
+    // Missing Residues Methods
+    async detectMissingResidues() {
+        if (!this.currentProtein) {
+            this.showMissingStatus('error', 'Please load a protein structure first');
+            return;
+        }
+
+        const statusDiv = document.getElementById('missing-status');
+        statusDiv.className = 'status-message info';
+        statusDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Detecting missing residues...';
+        statusDiv.style.display = 'block';
+
+        try {
+            const response = await fetch('/api/detect-missing-residues', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                this.missingResiduesInfo = result.missing_residues;
+                this.missingResiduesPdbId = result.pdb_id;
+
+                if (Object.keys(result.missing_residues).length === 0) {
+                    this.showMissingStatus('success', 'No missing residues detected in this structure!');
+                    document.getElementById('missing-chains-section').style.display = 'none';
+                    document.getElementById('build-complete-structure').disabled = true;
+                    document.getElementById('missing-summary').style.display = 'none';
+                } else {
+                    this.showMissingStatus('success', `Found missing residues in ${Object.keys(result.missing_residues).length} chain(s)`);
+                    this.renderMissingChains(result.chains_with_missing, result.missing_residues);
+                    document.getElementById('missing-chains-section').style.display = 'block';
+                    document.getElementById('missing-summary').style.display = 'block';
+                    this.displayMissingSummary(result.missing_residues);
+                }
+            } else {
+                throw new Error(result.error || 'Failed to detect missing residues');
+            }
+        } catch (error) {
+            console.error('Error detecting missing residues:', error);
+            this.showMissingStatus('error', `Error: ${error.message}`);
+        }
+    }
+
+    renderMissingChains(chainsWithMissing, missingResidues) {
+        const container = document.getElementById('missing-chains-list');
+        container.innerHTML = '';
+
+        chainsWithMissing.forEach(chain => {
+            const missingCount = missingResidues[chain]?.count || 0;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'checkbox-inline';
+            wrapper.innerHTML = `
+                <label class="checkbox-container">
+                    <input type="checkbox" id="missing-chain-${chain}" data-chain="${chain}" checked>
+                    <span class="checkmark"></span>
+                    Chain ${chain} (${missingCount} missing residues)
+                </label>
+            `;
+            container.appendChild(wrapper);
+        });
+
+        // Update button state based on selections
+        this.updateBuildButtonState();
+        
+        // Add event listeners to checkboxes
+        container.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+            checkbox.addEventListener('change', () => this.updateBuildButtonState());
+        });
+    }
+
+    updateBuildButtonState() {
+        const container = document.getElementById('missing-chains-list');
+        const selectedChains = Array.from(container.querySelectorAll('input[type="checkbox"]:checked'));
+        const buildBtn = document.getElementById('build-complete-structure');
+        const previewBtn = document.getElementById('preview-completed-structure');
+        const downloadBtn = document.getElementById('download-completed-structure');
+
+        if (selectedChains.length > 0) {
+            buildBtn.disabled = false;
+        } else {
+            buildBtn.disabled = true;
+            previewBtn.disabled = true;
+            downloadBtn.disabled = true;
+        }
+    }
+
+    displayMissingSummary(missingResidues) {
+        const summaryContent = document.getElementById('missing-summary-content');
+        let html = '<div class="missing-residues-list">';
+
+        Object.entries(missingResidues).forEach(([chain, info]) => {
+            html += `<div class="chain-missing-info">`;
+            html += `<h4>Chain ${chain}: ${info.count} missing residues</h4>`;
+            if (info.residues && info.residues.length > 0) {
+                html += '<ul>';
+                info.residues.slice(0, 10).forEach(([resname, resnum]) => {
+                    html += `<li>${resname} ${resnum}</li>`;
+                });
+                if (info.residues.length > 10) {
+                    html += `<li>... and ${info.residues.length - 10} more</li>`;
+                }
+                html += '</ul>';
+            }
+            html += `</div>`;
+        });
+
+        html += '</div>';
+        summaryContent.innerHTML = html;
+    }
+
+    async buildCompletedStructure() {
+        const container = document.getElementById('missing-chains-list');
+        const selectedChains = Array.from(container.querySelectorAll('input[type="checkbox"]:checked'))
+            .map(cb => cb.getAttribute('data-chain'));
+
+        if (selectedChains.length === 0) {
+            this.showMissingStatus('error', 'Please select at least one chain to complete');
+            return;
+        }
+
+        const buildBtn = document.getElementById('build-complete-structure');
+        const originalText = buildBtn.innerHTML;
+        buildBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Building...';
+        buildBtn.disabled = true;
+
+        try {
+            const response = await fetch('/api/build-completed-structure', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    selected_chains: selectedChains
+                })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                this.completedProtein = {
+                    content: result.completed_structure,
+                    completed_chains: result.completed_chains
+                };
+
+                this.showMissingStatus('success', result.message);
+                document.getElementById('preview-completed-structure').disabled = false;
+                document.getElementById('download-completed-structure').disabled = false;
+            } else {
+                throw new Error(result.error || 'Failed to build completed structure');
+            }
+        } catch (error) {
+            console.error('Error building completed structure:', error);
+            this.showMissingStatus('error', `Error: ${error.message}`);
+        } finally {
+            buildBtn.innerHTML = originalText;
+            buildBtn.disabled = false;
+        }
+    }
+
+    async previewCompletedStructure() {
+        if (!this.completedProtein) {
+            // Try to fetch from server
+            try {
+                const response = await fetch('/api/get-completed-structure');
+                const result = await response.json();
+                
+                if (result.success && result.exists) {
+                    this.completedProtein = {
+                        content: result.content
+                    };
+                } else {
+                    alert('Completed structure not found. Please build it first.');
+                    return;
+                }
+            } catch (error) {
+                alert('Error loading completed structure: ' + error.message);
+                return;
+            }
+        }
+
+        // Get original structure
+        if (!this.currentProtein) {
+            alert('Original structure not found. Please load a PDB file first.');
+            return;
+        }
+
+        // Show preview in the same tab
+        const previewDiv = document.getElementById('completed-structure-preview');
+        previewDiv.style.display = 'block';
+
+        // Load both structures side by side
+        try {
+            // Load original structure
+            await this.loadOriginalStructureViewer();
+            
+            // Load completed structure
+            await this.loadCompletedStructureViewer();
+        } catch (error) {
+            console.error('Error previewing structures:', error);
+            alert('Error loading 3D visualization: ' + error.message);
+        }
+    }
+
+    async loadOriginalStructureViewer() {
+        try {
+            // Initialize NGL stage for original structure if not already done
+            if (!this.originalNglStage) {
+                this.originalNglStage = new NGL.Stage("original-ngl-viewer", {
+                    backgroundColor: "white",
+                    quality: "medium"
+                });
+            }
+
+            // Clear existing components
+            this.originalNglStage.removeAllComponents();
+
+            // Create a blob from original PDB content
+            const blob = new Blob([this.currentProtein.content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+
+            // Load the original structure
+            const component = await this.originalNglStage.loadFile(url, {
+                ext: "pdb",
+                defaultRepresentation: false
+            });
+
+            // Add cartoon representation for each chain with consistent colors
+            // This ensures each chain gets the same color as in Step 1
+            // Use chains from parsed protein data (more reliable than structure API)
+            const structureChains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                // Add representation for each chain that exists in the structure
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        component.addRepresentation("cartoon", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.9
+                        });
+                    }
+                });
+            } else {
+                // Fallback: use chainid if color map not available
+                component.addRepresentation("cartoon", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.9
+                });
+            }
+            
+            // Apply consistent chain colors after representation is added (backup)
+            setTimeout(() => {
+                this.applyConsistentChainColors(component);
+            }, 500);
+
+            // Add ball and stick for ligands if present
+            if (this.currentProtein.ligands && this.currentProtein.ligands.length > 0) {
+                component.addRepresentation("ball+stick", {
+                    sele: "hetero",
+                    color: "element",
+                    radius: 0.15
+                });
+            }
+
+            // Auto-fit the view
+            this.originalNglStage.autoView();
+
+            // Show controls
+            document.getElementById('original-viewer-controls').style.display = 'flex';
+
+            // Clean up the blob URL
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error('Error loading original structure viewer:', error);
+            throw error;
+        }
+    }
+
+    async loadCompletedStructureViewer() {
+        try {
+            // Initialize NGL stage for completed structure if not already done
+            if (!this.completedNglStage) {
+                this.completedNglStage = new NGL.Stage("completed-ngl-viewer", {
+                    backgroundColor: "white",
+                    quality: "medium"
+                });
+            }
+
+            // Clear existing components
+            this.completedNglStage.removeAllComponents();
+
+            // Create a blob from completed PDB content
+            const blob = new Blob([this.completedProtein.content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+
+            // Load the completed structure
+            const component = await this.completedNglStage.loadFile(url, {
+                ext: "pdb",
+                defaultRepresentation: false
+            });
+
+            // Add cartoon representation for each chain with consistent colors
+            // This ensures each chain gets the same color as in Step 1
+            // Use chains from parsed protein data (more reliable than structure API)
+            const structureChains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                // Add representation for each chain that exists in the structure
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        component.addRepresentation("cartoon", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.9
+                        });
+                    }
+                });
+            } else {
+                // Fallback: use chainid if color map not available
+                component.addRepresentation("cartoon", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.9
+                });
+            }
+            
+            // Apply consistent chain colors after representation is added (backup)
+            setTimeout(() => {
+                this.applyConsistentChainColors(component);
+            }, 500);
+
+            // Add ball and stick for ligands if present
+            if (this.currentProtein.ligands && this.currentProtein.ligands.length > 0) {
+                component.addRepresentation("ball+stick", {
+                    sele: "hetero",
+                    color: "element",
+                    radius: 0.15
+                });
+            }
+
+            // Auto-fit the view
+            this.completedNglStage.autoView();
+
+            // Show controls
+            document.getElementById('completed-viewer-controls').style.display = 'flex';
+
+            // Clean up the blob URL
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error('Error loading completed structure viewer:', error);
+            throw error;
+        }
+    }
+
+    resetCompletedView() {
+        if (this.completedNglStage) {
+            this.completedNglStage.autoView();
+        }
+    }
+
+    toggleCompletedRepresentation() {
+        if (!this.completedNglStage) return;
+
+        const components = this.completedNglStage.compList;
+        if (components.length === 0) return;
+
+        const component = components[0];
+        component.removeAllRepresentations();
+
+        if (this.completedRepresentation === 'cartoon') {
+            // Switch to ball and stick
+            component.addRepresentation("ball+stick", {
+                color: "element",
+                radius: 0.15
+            });
+            this.completedRepresentation = 'ball+stick';
+            document.getElementById('completed-style-text').textContent = 'Ball & Stick';
+        } else if (this.completedRepresentation === 'ball+stick') {
+            // Switch to surface with consistent chain colors
+            // Use chains from parsed protein data (more reliable than structure API)
+            const structureChains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        component.addRepresentation("surface", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.7
+                        });
+                    }
+                });
+            } else {
+                component.addRepresentation("surface", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.7
+                });
+            }
+            this.completedRepresentation = 'surface';
+            document.getElementById('completed-style-text').textContent = 'Surface';
+        } else {
+            // Switch back to cartoon
+            const chainColorFunc = this.getChainColorScheme(component);
+            component.addRepresentation("cartoon", {
+                sele: "protein",
+                colorScheme: chainColorFunc,
+                opacity: 0.8
+            });
+            // Add ligands if present
+            if (this.currentProtein && this.currentProtein.ligands && this.currentProtein.ligands.length > 0) {
+                component.addRepresentation("ball+stick", {
+                    sele: "hetero",
+                    color: "element",
+                    radius: 0.15
+                });
+            }
+            this.completedRepresentation = 'cartoon';
+            document.getElementById('completed-style-text').textContent = 'Mixed';
+        }
+    }
+
+    toggleCompletedSpin() {
+        if (!this.completedNglStage) return;
+
+        this.completedIsSpinning = !this.completedIsSpinning;
+        this.completedNglStage.setSpin(this.completedIsSpinning);
+    }
+
+    // Original structure viewer controls
+    resetOriginalView() {
+        if (this.originalNglStage) {
+            this.originalNglStage.autoView();
+        }
+    }
+
+    toggleOriginalRepresentation() {
+        if (!this.originalNglStage) return;
+
+        const components = this.originalNglStage.compList;
+        if (components.length === 0) return;
+
+        const component = components[0];
+        component.removeAllRepresentations();
+
+        if (this.originalRepresentation === 'cartoon') {
+            // Switch to ball and stick
+            component.addRepresentation("ball+stick", {
+                color: "element",
+                radius: 0.15
+            });
+            this.originalRepresentation = 'ball+stick';
+            document.getElementById('original-style-text').textContent = 'Ball & Stick';
+        } else if (this.originalRepresentation === 'ball+stick') {
+            // Switch to surface with consistent chain colors
+            // Use chains from parsed protein data (more reliable than structure API)
+            const structureChains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        component.addRepresentation("surface", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.7
+                        });
+                    }
+                });
+            } else {
+                component.addRepresentation("surface", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.7
+                });
+            }
+            this.originalRepresentation = 'surface';
+            document.getElementById('original-style-text').textContent = 'Surface';
+        } else {
+            // Switch back to cartoon
+            const chainColorFunc = this.getChainColorScheme(component);
+            component.addRepresentation("cartoon", {
+                sele: "protein",
+                colorScheme: chainColorFunc,
+                opacity: 0.8
+            });
+            if (this.currentProtein.ligands && this.currentProtein.ligands.length > 0) {
+                component.addRepresentation("ball+stick", {
+                    sele: "hetero",
+                    color: "element",
+                    radius: 0.15
+                });
+            }
+            this.originalRepresentation = 'cartoon';
+            document.getElementById('original-style-text').textContent = 'Mixed';
+        }
+    }
+
+    toggleOriginalSpin() {
+        if (!this.originalNglStage) return;
+
+        this.originalIsSpinning = !this.originalIsSpinning;
+        this.originalNglStage.setSpin(this.originalIsSpinning);
+    }
+
+
+    downloadCompletedStructure() {
+        if (!this.completedProtein) {
+            alert('Completed structure not found. Please build it first.');
+            return;
+        }
+
+        const blob = new Blob([this.completedProtein.content], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '0_complete_structure.pdb';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    showMissingStatus(type, message) {
+        const statusDiv = document.getElementById('missing-status');
+        statusDiv.className = `status-message ${type}`;
+        statusDiv.textContent = message;
+        statusDiv.style.display = 'block';
+
+        if (type === 'success') {
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
+        }
+    }
+
+    applyConsistentChainColors(component) {
+        // Apply consistent colors to chains using NGL's API
+        if (!component || !component.structure || !this.chainColorMap || Object.keys(this.chainColorMap).length === 0) {
+            console.warn('Cannot apply chain colors: missing component, structure, or color map');
+            return;
+        }
+        
+        try {
+            // Get all chains - use parsed protein data (more reliable than structure API)
+            const chains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            console.log('Applying colors to chains:', chains, 'Color map:', this.chainColorMap);
+            
+            // Apply colors to each representation using setColorByChain
+            component.reprList.forEach((repr) => {
+                if (repr.type === 'cartoon' || repr.type === 'surface') {
+                    chains.forEach((chain) => {
+                        if (this.chainColorMap[chain]) {
+                            try {
+                                const color = this.chainColorMap[chain];
+                                // Use setColorByChain if available, otherwise use setColor
+                                if (repr.setColorByChain) {
+                                    repr.setColorByChain(color, chain);
+                                } else {
+                                    // Fallback: use setColor with chain selection
+                                    repr.setColor(color, `chain ${chain}`);
+                                }
+                                console.log(`Applied color ${color} to chain ${chain}`);
+                            } catch (err) {
+                                console.warn(`Could not set color for chain ${chain}:`, err);
+                            }
+                        }
+                    });
+                }
+            });
+        } catch (error) {
+            console.warn('Could not apply consistent chain colors:', error);
+        }
     }
 }
 

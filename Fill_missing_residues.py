@@ -132,11 +132,32 @@ def rebuild_pdb_with_esmfold(
     from pymol import cmd
 
     # -----------------------------
-    # 0. Load original PDB into PyMOL
+    # 0. Clean up any existing objects with the same names
+    # -----------------------------
+    try:
+        # Delete existing objects if they exist
+        existing_objects = cmd.get_object_list()
+        if pdb_id in existing_objects:
+            cmd.delete(pdb_id)
+        
+        # Delete any existing ESMFold objects for the chains we're processing
+        for chain in chains_to_replace:
+            esm_obj = f"{pdb_id}_chain_{chain}_esmfold"
+            if esm_obj in existing_objects:
+                cmd.delete(esm_obj)
+        
+        # Delete final_model if it exists
+        if "final_model" in existing_objects:
+            cmd.delete("final_model")
+    except Exception as e:
+        print(f"Warning: Could not clean up existing objects: {e}")
+
+    # -----------------------------
+    # 1. Load original PDB into PyMOL
     # -----------------------------
     if original_pdb_path is None:
         # Default to the pipeline output location
-        original_pdb_path = "../output/0_original_input.pdb"
+        original_pdb_path = "../../output/0_original_input.pdb"
 
     print(f"Loading original PDB from {original_pdb_path} as object '{pdb_id}'")
     cmd.load(original_pdb_path, pdb_id)
@@ -145,7 +166,7 @@ def rebuild_pdb_with_esmfold(
         output_pdb = f"{pdb_id}_rebuilt.pdb"
 
     # -----------------------------
-    # 1. Align each ESMFold chain and fix chain IDs
+    # 2. Align each ESMFold chain and fix chain IDs
     # -----------------------------
     for chain in chains_to_replace:
         esm_obj = f"{pdb_id}_chain_{chain}_esmfold"
@@ -170,7 +191,7 @@ def rebuild_pdb_with_esmfold(
         cmd.align(*align_cmd)
 
     # -----------------------------
-    # 2. Build selection strings
+    # 3. Build selection strings
     # -----------------------------
     chains_str = "+".join(chains_to_replace)
 
@@ -185,21 +206,33 @@ def rebuild_pdb_with_esmfold(
     )
 
     # -----------------------------
-    # 3. Create final model
+    # 4. Create final model
     # -----------------------------
     cmd.select("final_model", selection)
 
     # -----------------------------
-    # 4. Save rebuilt structure
+    # 5. Save rebuilt structure
     # -----------------------------
     cmd.save(output_pdb, "final_model")
+    
+    # -----------------------------
+    # 6. Clean up temporary objects (keep final_model for potential reuse)
+    # -----------------------------
+    try:
+        # Delete the original and ESMFold objects, but keep final_model
+        cmd.delete(pdb_id)
+        for chain in chains_to_replace:
+            esm_obj = f"{pdb_id}_chain_{chain}_esmfold"
+            cmd.delete(esm_obj)
+    except Exception as e:
+        print(f"Warning: Could not clean up temporary objects: {e}")
 
     print(f"✅ Final rebuilt structure saved as: {output_pdb}")
 
 
 if __name__ == "__main__":
     # Path to the original input PDB used by the pipeline
-    original_pdb_path = "../output/0_original_input.pdb"
+    original_pdb_path = "../../output/0_original_input.pdb"
 
     # Automatically infer the PDB ID from the original PDB file,
     # instead of hard-coding it (e.g., '3hhr').
