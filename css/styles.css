@@ -978,6 +978,12 @@ input:checked + .slider:before {
     color: #3498db;
 }
 
+.prep-section-fullwidth {
+    width: 100%;
+    margin-top: 1rem;
+    margin-bottom: 2rem;
+}
+
 .prep-options {
     display: flex;
     flex-direction: column;
@@ -1137,3 +1143,115 @@ input:checked + .slider:before {
 .p-1 { padding: 0.5rem; }
 .p-2 { padding: 1rem; }
 .p-3 { padding: 1.5rem; }
+
+/* Missing Residues Horizontal Display */
+.missing-residues-horizontal {
+    display: inline;
+    color: #155724;
+    font-weight: bold;
+    font-size: 0.95rem;
+    word-wrap: break-word;
+    white-space: normal;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0;
+}
+
+.chain-missing-info {
+    margin-bottom: 1.5rem;
+}
+
+.chain-missing-info h4 {
+    color: #155724;
+    margin-bottom: 0.5rem;
+}
+
+/* Trim Residues Section */
+.trim-info-box {
+    background: #e7f3ff;
+    border: 1px solid #b3d9ff;
+    border-radius: 6px;
+    padding: 1rem;
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+    color: #004085;
+    font-size: 0.9rem;
+    line-height: 1.6;
+}
+
+.trim-info-box i {
+    color: #0066cc;
+    margin-right: 0.5rem;
+}
+
+.trim-info-box strong {
+    color: #003366;
+}
+
+.trim-residues-container {
+    margin-top: 1rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+}
+
+.trim-chain-controls {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.trim-chain-controls h5 {
+    color: #2c3e50;
+    margin-bottom: 0.75rem;
+    font-size: 1rem;
+}
+
+.trim-inputs {
+    display: flex;
+    gap: 1.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.trim-input-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.trim-input-group label {
+    font-weight: 600;
+    color: #495057;
+    font-size: 0.9rem;
+    min-width: 100px;
+}
+
+.trim-limit {
+    font-weight: normal;
+    color: #6c757d;
+    font-size: 0.85rem;
+    font-style: italic;
+}
+
+.trim-input-group input[type="number"] {
+    width: 80px;
+    padding: 0.5rem;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+.trim-input-group input[type="number"]:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+
+.trim-info {
+    font-size: 0.85rem;
+    color: #6c757d;
+    margin-top: 0.5rem;
+    font-style: italic;
+}

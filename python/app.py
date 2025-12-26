@@ -23,7 +23,10 @@ from Fill_missing_residues import (
     detect_missing_residues,
     get_chain_sequences,
     run_esmfold,
-    rebuild_pdb_with_esmfold
+    rebuild_pdb_with_esmfold,
+    write_fasta_for_missing_chains,
+    trim_residues_from_edges,
+    trim_chains_sequences
 )
 
 app = Flask(__name__, 
@@ -1785,6 +1788,74 @@ def detect_missing_residues_endpoint():
             'error': f'Failed to detect missing residues: {str(e)}'
         }), 500
 
+@app.route('/api/trim-residues', methods=['POST'])
+def trim_residues_endpoint():
+    """Trim residues from edges of chain sequences"""
+    try:
+        data = request.get_json()
+        chain_sequences = data.get('chain_sequences', {})
+        trim_specs = data.get('trim_specs', {})
+        pdb_id = data.get('pdb_id')
+        
+        if not chain_sequences:
+            return jsonify({
+                'success': False,
+                'error': 'No chain sequences provided'
+            }), 400
+        
+        if not trim_specs:
+            return jsonify({
+                'success': False,
+                'error': 'No trim specifications provided'
+            }), 400
+        
+        # Apply trimming
+        try:
+            trimmed_sequences = trim_chains_sequences(chain_sequences, trim_specs)
+        except ValueError as e:
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 400
+        
+        # Optionally write trimmed FASTA file if pdb_id is provided
+        if pdb_id:
+            try:
+                write_fasta_for_missing_chains(
+                    pdb_id, 
+                    trimmed_sequences, 
+                    output_dir=str(OUTPUT_DIR)
+                )
+                logger.info(f"Wrote trimmed FASTA file for PDB {pdb_id}")
+            except Exception as e:
+                logger.warning(f"Could not write trimmed FASTA file: {str(e)}")
+        
+        # Calculate trim info for response
+        trim_info = {}
+        for chain, spec in trim_specs.items():
+            original_len = len(chain_sequences.get(chain, ''))
+            trimmed_len = len(trimmed_sequences.get(chain, ''))
+            trim_info[chain] = {
+                'original_length': original_len,
+                'trimmed_length': trimmed_len,
+                'n_terminal_trimmed': spec.get('n_terminal', 0),
+                'c_terminal_trimmed': spec.get('c_terminal', 0)
+            }
+        
+        return jsonify({
+            'success': True,
+            'trimmed_sequences': trimmed_sequences,
+            'trim_info': trim_info,
+            'message': f'Successfully trimmed residues from {len(trim_specs)} chain(s)'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error trimming residues: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to trim residues: {str(e)}'
+        }), 500
+
 @app.route('/api/build-completed-structure', methods=['POST'])
 def build_completed_structure_endpoint():
     """Build completed structure using ESMFold for selected chains"""
@@ -1815,8 +1886,13 @@ def build_completed_structure_endpoint():
                 'error': f'Could not determine PDB ID: {str(e)}'
             }), 400
         
-        # Get chain sequences
-        chain_sequences = get_chain_sequences(pdb_id)
+        # Get chain sequences (use provided sequences if available, otherwise fetch)
+        provided_sequences = data.get('chain_sequences', None)
+        if provided_sequences:
+            chain_sequences = provided_sequences
+            logger.info("Using provided chain sequences (may be trimmed)")
+        else:
+            chain_sequences = get_chain_sequences(pdb_id)
         
         # Verify selected chains have sequences
         chains_to_process = []
@@ -1831,6 +1907,20 @@ def build_completed_structure_endpoint():
                 'success': False,
                 'error': 'None of the selected chains have sequences available'
             }), 400
+        
+        # Create dictionary of chains with their sequences for FASTA writing
+        chains_with_missing = {
+            chain: chain_sequences[chain]
+            for chain in chains_to_process
+        }
+        
+        # Write FASTA file for the selected chains
+        try:
+            write_fasta_for_missing_chains(pdb_id, chains_with_missing, output_dir=str(OUTPUT_DIR))
+            logger.info(f"Wrote FASTA file for chains: {chains_to_process}")
+        except Exception as e:
+            logger.warning(f"Could not write FASTA file: {str(e)}")
+            # Don't fail the entire operation if FASTA writing fails
         
         # Run ESMFold for each selected chain
         esmfold_results = {}

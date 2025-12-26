@@ -8,6 +8,7 @@ class MDSimulationPipeline {
         this.completedProtein = null;
         this.missingResiduesInfo = null;
         this.missingResiduesPdbId = null;
+        this.chainSequences = null;
         this.simulationParams = {};
         this.generatedFiles = {};
         this.nglStage = null;
@@ -125,6 +126,10 @@ class MDSimulationPipeline {
         const buildCompleteBtn = document.getElementById('build-complete-structure');
         if (buildCompleteBtn) {
             buildCompleteBtn.addEventListener('click', () => this.buildCompletedStructure());
+        }
+        const applyTrimBtn = document.getElementById('apply-trim');
+        if (applyTrimBtn) {
+            applyTrimBtn.addEventListener('click', () => this.applyTrimming());
         }
         const previewCompletedBtn = document.getElementById('preview-completed-structure');
         if (previewCompletedBtn) {
@@ -2163,10 +2168,12 @@ echo "Analysis completed! Results saved in analysis/ directory"
             if (result.success) {
                 this.missingResiduesInfo = result.missing_residues;
                 this.missingResiduesPdbId = result.pdb_id;
+                this.chainSequences = result.chain_sequences || {};
 
                 if (Object.keys(result.missing_residues).length === 0) {
                     this.showMissingStatus('success', 'No missing residues detected in this structure!');
                     document.getElementById('missing-chains-section').style.display = 'none';
+                    document.getElementById('trim-residues-section').style.display = 'none';
                     document.getElementById('build-complete-structure').disabled = true;
                     document.getElementById('missing-summary').style.display = 'none';
                 } else {
@@ -2175,6 +2182,7 @@ echo "Analysis completed! Results saved in analysis/ directory"
                     document.getElementById('missing-chains-section').style.display = 'block';
                     document.getElementById('missing-summary').style.display = 'block';
                     this.displayMissingSummary(result.missing_residues);
+                    this.renderTrimControls(result.chains_with_missing);
                 }
             } else {
                 throw new Error(result.error || 'Failed to detect missing residues');
@@ -2230,26 +2238,381 @@ echo "Analysis completed! Results saved in analysis/ directory"
 
     displayMissingSummary(missingResidues) {
         const summaryContent = document.getElementById('missing-summary-content');
-        let html = '<div class="missing-residues-list">';
+        let html = '';
 
         Object.entries(missingResidues).forEach(([chain, info]) => {
             html += `<div class="chain-missing-info">`;
             html += `<h4>Chain ${chain}: ${info.count} missing residues</h4>`;
             if (info.residues && info.residues.length > 0) {
-                html += '<ul>';
-                info.residues.slice(0, 10).forEach(([resname, resnum]) => {
-                    html += `<li>${resname} ${resnum}</li>`;
-                });
-                if (info.residues.length > 10) {
-                    html += `<li>... and ${info.residues.length - 10} more</li>`;
-                }
-                html += '</ul>';
+                // Display all residues horizontally directly on green background
+                const residueStrings = info.residues.map(
+                    ([resname, resnum]) => `${resname} ${resnum}`
+                );
+                html += '<p class="missing-residues-horizontal">';
+                html += residueStrings.join(', ');
+                html += '</p>';
             }
             html += `</div>`;
         });
 
-        html += '</div>';
         summaryContent.innerHTML = html;
+    }
+
+    analyzeEdgeResidues(chain, missingResidues) {
+        /**
+         * Analyze missing residues to determine which ones are at edges
+         * Returns: { n_terminal: {start, end, count}, c_terminal: {start, end, count} }
+         */
+        if (!missingResidues || !missingResidues[chain] || !missingResidues[chain].residues) {
+            return { n_terminal: null, c_terminal: null };
+        }
+
+        const residues = missingResidues[chain].residues;
+        if (residues.length === 0) {
+            return { n_terminal: null, c_terminal: null };
+        }
+
+        // Extract residue numbers and sort
+        const resNums = residues.map(([resname, resnum]) => resnum).sort((a, b) => a - b);
+        
+        // Find all consecutive ranges
+        const ranges = [];
+        if (resNums.length > 0) {
+            let rangeStart = resNums[0];
+            let rangeEnd = resNums[0];
+            
+            for (let i = 1; i < resNums.length; i++) {
+                if (resNums[i] === rangeEnd + 1) {
+                    // Consecutive, extend range
+                    rangeEnd = resNums[i];
+                } else {
+                    // Gap found, save current range and start new one
+                    ranges.push({ start: rangeStart, end: rangeEnd });
+                    rangeStart = resNums[i];
+                    rangeEnd = resNums[i];
+                }
+            }
+            // Don't forget the last range
+            ranges.push({ start: rangeStart, end: rangeEnd });
+        }
+
+        // Identify N-terminal edge (first range if it starts from a low number, typically 0 or 1)
+        let nTerminal = null;
+        if (ranges.length > 0) {
+            const firstRange = ranges[0];
+            // Consider it N-terminal if it starts from 0 or 1 (common in PDB files)
+            if (firstRange.start <= 1) {
+                nTerminal = {
+                    start: firstRange.start,
+                    end: firstRange.end,
+                    count: firstRange.end - firstRange.start + 1
+                };
+            }
+        }
+
+        // Identify C-terminal edge (last range)
+        // We consider it C-terminal if:
+        // 1. There are multiple ranges (the last one is likely C-terminal since there are internal gaps)
+        // 2. OR if there's only one range but it's not N-terminal (could be C-terminal only)
+        let cTerminal = null;
+        if (ranges.length > 0) {
+            const lastRange = ranges[ranges.length - 1];
+            
+            if (ranges.length > 1) {
+                // Multiple ranges - the last one is likely C-terminal (there are internal missing residues)
+                cTerminal = {
+                    start: lastRange.start,
+                    end: lastRange.end,
+                    count: lastRange.end - lastRange.start + 1
+                };
+            } else if (nTerminal === null) {
+                // Only one range and it's not N-terminal
+                // Check if sequence length is available to verify it's at the end
+                const seqLength = this.chainSequences[chain] ? this.chainSequences[chain].length : 0;
+                if (seqLength > 0 && lastRange.end >= seqLength - 5) {
+                    // If the range ends within 5 residues of the sequence end, consider it C-terminal
+                    cTerminal = {
+                        start: lastRange.start,
+                        end: lastRange.end,
+                        count: lastRange.end - lastRange.start + 1
+                    };
+                } else if (lastRange.start > 10) {
+                    // If the range starts well after the beginning (not N-terminal), 
+                    // and there's only one range, it might be C-terminal
+                    // But be conservative - only if it's clearly not at the start
+                    cTerminal = {
+                        start: lastRange.start,
+                        end: lastRange.end,
+                        count: lastRange.end - lastRange.start + 1
+                    };
+                }
+            }
+        }
+
+        return {
+            n_terminal: nTerminal,
+            c_terminal: cTerminal
+        };
+    }
+
+    updateTrimInfoBox(chainsWithMissing) {
+        const infoBox = document.getElementById('trim-info-box-content');
+        if (!infoBox || !this.missingResiduesInfo) {
+            return;
+        }
+
+        let html = '<i class="fas fa-info-circle"></i> <strong>Note:</strong> ';
+        
+        const edgeInfo = [];
+        chainsWithMissing.forEach(chain => {
+            const edges = this.analyzeEdgeResidues(chain, this.missingResiduesInfo);
+            const chainInfo = [];
+            
+            if (edges.n_terminal) {
+                chainInfo.push(`residues ${edges.n_terminal.start}-${edges.n_terminal.end} from N-terminal`);
+            }
+            if (edges.c_terminal) {
+                chainInfo.push(`residues ${edges.c_terminal.start}-${edges.c_terminal.end} from C-terminal`);
+            }
+            
+            if (chainInfo.length > 0) {
+                edgeInfo.push(`Chain ${chain}: ${chainInfo.join(' and ')}`);
+            }
+        });
+
+        if (edgeInfo.length > 0) {
+            html += 'Only missing residues at the edges can be trimmed. ';
+            html += edgeInfo.join('; ') + '. ';
+            html += 'Missing residues in internal loops (discontinuities in the middle) cannot be trimmed and will be filled by ESMFold.';
+        } else {
+            html += 'Only missing residues at the N-terminal edge (beginning) and C-terminal edge (end) can be trimmed. ';
+            html += 'Missing residues in internal loops (discontinuities in the middle of the sequence) cannot be trimmed using this tool and will be filled by ESMFold.';
+        }
+
+        infoBox.innerHTML = html;
+    }
+
+    renderTrimControls(chainsWithMissing) {
+        const container = document.getElementById('trim-residues-list');
+        container.innerHTML = '';
+
+        if (!this.chainSequences || Object.keys(this.chainSequences).length === 0) {
+            return;
+        }
+
+        // Update the info box with dynamic information
+        this.updateTrimInfoBox(chainsWithMissing);
+
+        chainsWithMissing.forEach(chain => {
+            const sequence = this.chainSequences[chain] || '';
+            const seqLength = sequence.length;
+            
+            // Get edge residue information for this chain
+            const edges = this.analyzeEdgeResidues(chain, this.missingResiduesInfo);
+            
+            // Calculate max values based on detected edge residues
+            const nTerminalMax = edges.n_terminal ? edges.n_terminal.count : 0;
+            const cTerminalMax = edges.c_terminal ? edges.c_terminal.count : 0;
+            
+            // Build N-terminal label with limit info
+            let nTerminalLabel = 'N-terminal:';
+            if (edges.n_terminal) {
+                nTerminalLabel += ` <span class="trim-limit">(max: ${nTerminalMax})</span>`;
+            }
+            
+            // Build C-terminal label with limit info
+            let cTerminalLabel = 'C-terminal:';
+            if (edges.c_terminal) {
+                cTerminalLabel += ` <span class="trim-limit">(max: ${cTerminalMax})</span>`;
+            }
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'trim-chain-controls';
+            wrapper.innerHTML = `
+                <h5>Chain ${chain} (${seqLength} residues)</h5>
+                <div class="trim-inputs">
+                    <div class="trim-input-group">
+                        <label>${nTerminalLabel}</label>
+                        <input type="number" 
+                               id="trim-n-${chain}" 
+                               data-chain="${chain}" 
+                               min="0" 
+                               max="${nTerminalMax > 0 ? nTerminalMax : seqLength - 1}" 
+                               value="0"
+                               class="trim-n-input"
+                               ${nTerminalMax > 0 ? `data-max-edge="${nTerminalMax}"` : ''}>
+                        <span>residues</span>
+                    </div>
+                    <div class="trim-input-group">
+                        <label>${cTerminalLabel}</label>
+                        <input type="number" 
+                               id="trim-c-${chain}" 
+                               data-chain="${chain}" 
+                               min="0" 
+                               max="${cTerminalMax > 0 ? cTerminalMax : seqLength - 1}" 
+                               value="0"
+                               class="trim-c-input"
+                               ${cTerminalMax > 0 ? `data-max-edge="${cTerminalMax}"` : ''}>
+                        <span>residues</span>
+                    </div>
+                </div>
+                <div class="trim-info" id="trim-info-${chain}">
+                    Original length: ${seqLength} residues
+                </div>
+            `;
+            container.appendChild(wrapper);
+
+            // Add event listeners to update info and enforce limits
+            const nInput = wrapper.querySelector(`#trim-n-${chain}`);
+            const cInput = wrapper.querySelector(`#trim-c-${chain}`);
+            const infoDiv = wrapper.querySelector(`#trim-info-${chain}`);
+
+            // Enforce max limits based on edge residues
+            if (nTerminalMax > 0) {
+                nInput.addEventListener('input', () => {
+                    const value = parseInt(nInput.value) || 0;
+                    if (value > nTerminalMax) {
+                        nInput.value = nTerminalMax;
+                    }
+                });
+            }
+            
+            if (cTerminalMax > 0) {
+                cInput.addEventListener('input', () => {
+                    const value = parseInt(cInput.value) || 0;
+                    if (value > cTerminalMax) {
+                        cInput.value = cTerminalMax;
+                    }
+                });
+            }
+
+            const updateInfo = () => {
+                const nTrim = parseInt(nInput.value) || 0;
+                const cTrim = parseInt(cInput.value) || 0;
+                const totalTrim = nTrim + cTrim;
+                const newLength = seqLength - totalTrim;
+                
+                // Check if values exceed edge limits
+                let warningMsg = '';
+                if (nTerminalMax > 0 && nTrim > nTerminalMax) {
+                    warningMsg = `<span style="color: #dc3545;">Warning: N-terminal trim (${nTrim}) exceeds edge limit (${nTerminalMax})</span>`;
+                } else if (cTerminalMax > 0 && cTrim > cTerminalMax) {
+                    warningMsg = `<span style="color: #dc3545;">Warning: C-terminal trim (${cTrim}) exceeds edge limit (${cTerminalMax})</span>`;
+                } else if (totalTrim >= seqLength) {
+                    warningMsg = `<span style="color: #dc3545;">Error: Total trim (${totalTrim}) exceeds sequence length (${seqLength})</span>`;
+                } else if (newLength <= 0) {
+                    warningMsg = `<span style="color: #dc3545;">Error: Resulting sequence would be empty</span>`;
+                } else {
+                    let infoText = `Original: ${seqLength} residues → Trimmed: ${newLength} residues (removing ${nTrim} from N-term, ${cTrim} from C-term)`;
+                    if (nTerminalMax > 0 || cTerminalMax > 0) {
+                        infoText += `<br><small style="color: #6c757d;">Edge limits: N-term max ${nTerminalMax}, C-term max ${cTerminalMax}</small>`;
+                    }
+                    infoDiv.innerHTML = infoText;
+                }
+                
+                if (warningMsg) {
+                    infoDiv.innerHTML = warningMsg;
+                }
+            };
+
+            nInput.addEventListener('input', updateInfo);
+            cInput.addEventListener('input', updateInfo);
+            updateInfo(); // Initial update
+        });
+
+        // Show the trim section
+        document.getElementById('trim-residues-section').style.display = 'block';
+    }
+
+    async applyTrimming() {
+        if (!this.chainSequences || !this.missingResiduesPdbId) {
+            this.showTrimStatus('error', 'No chain sequences available. Please detect missing residues first.');
+            return;
+        }
+
+        const trimStatusDiv = document.getElementById('trim-status');
+        trimStatusDiv.className = 'status-message info';
+        trimStatusDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying trimming...';
+        trimStatusDiv.style.display = 'block';
+
+        try {
+            // Collect trim specifications from inputs
+            const trimSpecs = {};
+            const nInputs = document.querySelectorAll('.trim-n-input');
+            const cInputs = document.querySelectorAll('.trim-c-input');
+
+            nInputs.forEach(nInput => {
+                const chain = nInput.getAttribute('data-chain');
+                const nTrim = parseInt(nInput.value) || 0;
+                const cInput = document.querySelector(`#trim-c-${chain}`);
+                const cTrim = parseInt(cInput.value) || 0;
+
+                if (nTrim > 0 || cTrim > 0) {
+                    trimSpecs[chain] = {
+                        n_terminal: nTrim,
+                        c_terminal: cTrim
+                    };
+                }
+            });
+
+            if (Object.keys(trimSpecs).length === 0) {
+                this.showTrimStatus('info', 'No trimming specified. Enter values > 0 to trim residues.');
+                return;
+            }
+
+            // Call API to apply trimming
+            const response = await fetch('/api/trim-residues', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    pdb_id: this.missingResiduesPdbId,
+                    chain_sequences: this.chainSequences,
+                    trim_specs: trimSpecs
+                })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                // Update stored sequences with trimmed versions
+                this.chainSequences = result.trimmed_sequences;
+                
+                // Update trim info displays
+                Object.entries(result.trim_info).forEach(([chain, info]) => {
+                    const infoDiv = document.getElementById(`trim-info-${chain}`);
+                    if (infoDiv) {
+                        infoDiv.innerHTML = `
+                            <strong>Trimmed!</strong> Original: ${info.original_length} → 
+                            Trimmed: ${info.trimmed_length} residues 
+                            (removed ${info.n_terminal_trimmed} from N-term, ${info.c_terminal_trimmed} from C-term)
+                        `;
+                        infoDiv.style.color = '#155724';
+                    }
+                });
+
+                this.showTrimStatus('success', result.message);
+            } else {
+                throw new Error(result.error || 'Failed to apply trimming');
+            }
+        } catch (error) {
+            console.error('Error applying trimming:', error);
+            this.showTrimStatus('error', `Error: ${error.message}`);
+        }
+    }
+
+    showTrimStatus(type, message) {
+        const statusDiv = document.getElementById('trim-status');
+        statusDiv.className = `status-message ${type}`;
+        statusDiv.textContent = message;
+        statusDiv.style.display = 'block';
+
+        if (type === 'success') {
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
+        }
     }
 
     async buildCompletedStructure() {
@@ -2268,14 +2631,31 @@ echo "Analysis completed! Results saved in analysis/ directory"
         buildBtn.disabled = true;
 
         try {
+            // Prepare request body with optional trimmed sequences
+            const requestBody = {
+                selected_chains: selectedChains
+            };
+            
+            // Include trimmed sequences if available (they may have been trimmed)
+            if (this.chainSequences && Object.keys(this.chainSequences).length > 0) {
+                // Only include sequences for selected chains
+                const selectedSequences = {};
+                selectedChains.forEach(chain => {
+                    if (this.chainSequences[chain]) {
+                        selectedSequences[chain] = this.chainSequences[chain];
+                    }
+                });
+                if (Object.keys(selectedSequences).length > 0) {
+                    requestBody.chain_sequences = selectedSequences;
+                }
+            }
+
             const response = await fetch('/api/build-completed-structure', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    selected_chains: selectedChains
-                })
+                body: JSON.stringify(requestBody)
             });
 
             const result = await response.json();

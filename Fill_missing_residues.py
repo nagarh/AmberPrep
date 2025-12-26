@@ -86,16 +86,99 @@ def get_chain_sequences(pdb_id):
 
     return chain_seqs
 
-def write_fasta_for_missing_chains(pdb_id, chains_with_missing):
-    filename = f"{pdb_id}_chains_with_missing.fasta"
+def trim_residues_from_edges(sequence, n_terminal_trim=0, c_terminal_trim=0):
+    """
+    Trim residues from the edges (N-terminal and C-terminal) of a sequence.
+    Only trims from the edges, not from loops in between.
+    
+    Args:
+        sequence: str
+            The amino acid sequence to trim
+        n_terminal_trim: int
+            Number of residues to remove from the N-terminal (start)
+        c_terminal_trim: int
+            Number of residues to remove from the C-terminal (end)
+    
+    Returns:
+        str: The trimmed sequence
+    
+    Raises:
+        ValueError: If trim counts exceed sequence length or are negative
+    """
+    if n_terminal_trim < 0 or c_terminal_trim < 0:
+        raise ValueError("Trim counts must be non-negative")
+    
+    if n_terminal_trim + c_terminal_trim >= len(sequence):
+        raise ValueError(
+            f"Total trim count ({n_terminal_trim + c_terminal_trim}) exceeds sequence length ({len(sequence)})"
+        )
+    
+    # Trim from N-terminal (start) and C-terminal (end)
+    trimmed = sequence[n_terminal_trim:len(sequence) - c_terminal_trim]
+    
+    return trimmed
 
-    with open(filename, "w") as f:
+
+def trim_chains_sequences(chains_with_sequences, trim_specs):
+    """
+    Apply trimming to multiple chain sequences based on specifications.
+    
+    Args:
+        chains_with_sequences: dict
+            Dictionary mapping chain IDs to sequences
+            Example: {'A': 'MKTAYIAKQR...', 'B': 'MKTAYIAKQR...'}
+        trim_specs: dict
+            Dictionary mapping chain IDs to trim specifications
+            Each specification is a dict with 'n_terminal' and/or 'c_terminal' keys
+            Example: {'A': {'n_terminal': 5, 'c_terminal': 3}, 'B': {'n_terminal': 2}}
+    
+    Returns:
+        dict: Dictionary mapping chain IDs to trimmed sequences
+    """
+    trimmed_chains = {}
+    
+    for chain, sequence in chains_with_sequences.items():
+        if chain in trim_specs:
+            spec = trim_specs[chain]
+            n_term = spec.get('n_terminal', 0)
+            c_term = spec.get('c_terminal', 0)
+            
+            try:
+                trimmed_seq = trim_residues_from_edges(sequence, n_term, c_term)
+                trimmed_chains[chain] = trimmed_seq
+            except ValueError as e:
+                raise ValueError(f"Error trimming chain {chain}: {str(e)}")
+        else:
+            # No trimming specified for this chain, keep original
+            trimmed_chains[chain] = sequence
+    
+    return trimmed_chains
+
+
+def write_fasta_for_missing_chains(pdb_id, chains_with_missing, output_dir=None):
+    """
+    Write FASTA file for chains with missing residues.
+    
+    Args:
+        pdb_id: PDB identifier
+        chains_with_missing: Dictionary mapping chain IDs to sequences
+        output_dir: Optional output directory. If None, writes to current directory.
+    """
+    filename = f"{pdb_id}_chains_with_missing.fasta"
+    
+    if output_dir:
+        from pathlib import Path
+        output_path = Path(output_dir) / filename
+    else:
+        output_path = filename
+
+    with open(output_path, "w") as f:
         for chain, seq in chains_with_missing.items():
             f.write(f">{pdb_id.upper()}_{chain}\n")
             for line in wrap(seq, 60):
                 f.write(line + "\n")
 
-    print(f"Wrote FASTA: {filename}")
+    print(f"Wrote FASTA: {output_path}")
 
 def run_esmfold(sequence):
     response = requests.post(
@@ -105,6 +188,7 @@ def run_esmfold(sequence):
     )
     response.raise_for_status()
     return response.text
+
 
 def rebuild_pdb_with_esmfold(
     pdb_id,
@@ -276,5 +360,7 @@ if __name__ == "__main__":
     #    ['B', 'C'],
     #    original_pdb_path=original_pdb_path,
     #                            )
+
+
 
 
