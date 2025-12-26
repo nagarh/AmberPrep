@@ -135,6 +135,10 @@ class MDSimulationPipeline {
         if (previewCompletedBtn) {
             previewCompletedBtn.addEventListener('click', () => this.previewCompletedStructure());
         }
+        const previewSuperimposedBtn = document.getElementById('preview-superimposed-structure');
+        if (previewSuperimposedBtn) {
+            previewSuperimposedBtn.addEventListener('click', () => this.previewSuperimposedStructure());
+        }
         const downloadCompletedBtn = document.getElementById('download-completed-structure');
         if (downloadCompletedBtn) {
             downloadCompletedBtn.addEventListener('click', () => this.downloadCompletedStructure());
@@ -2232,6 +2236,7 @@ echo "Analysis completed! Results saved in analysis/ directory"
         } else {
             buildBtn.disabled = true;
             previewBtn.disabled = true;
+            document.getElementById('preview-superimposed-structure').disabled = true;
             downloadBtn.disabled = true;
         }
     }
@@ -2668,6 +2673,7 @@ echo "Analysis completed! Results saved in analysis/ directory"
 
                 this.showMissingStatus('success', result.message);
                 document.getElementById('preview-completed-structure').disabled = false;
+                document.getElementById('preview-superimposed-structure').disabled = false;
                 document.getElementById('download-completed-structure').disabled = false;
             } else {
                 throw new Error(result.error || 'Failed to build completed structure');
@@ -2799,6 +2805,322 @@ echo "Analysis completed! Results saved in analysis/ directory"
             console.error('Error loading original structure viewer:', error);
             throw error;
         }
+    }
+
+    async previewSuperimposedStructure() {
+        // Show preview section
+        const previewDiv = document.getElementById('superimposed-structure-preview');
+        previewDiv.style.display = 'block';
+
+        try {
+            // Try to use in-memory data first (faster)
+            let originalText, completedText;
+            
+            if (this.currentProtein && this.currentProtein.content) {
+                // Use already loaded original structure
+                originalText = this.currentProtein.content;
+            } else {
+                // Fallback: fetch from server
+                const originalResponse = await fetch('/api/get-file?filename=0_original_input.pdb');
+                if (!originalResponse.ok) {
+                    throw new Error('Failed to load original structure file.');
+                }
+                originalText = await originalResponse.text();
+            }
+            
+            if (this.completedProtein && this.completedProtein.content) {
+                // Use already loaded completed structure
+                completedText = this.completedProtein.content;
+            } else {
+                // Fallback: fetch from server
+                const completedResponse = await fetch('/api/get-file?filename=0_complete_structure.pdb');
+                if (!completedResponse.ok) {
+                    throw new Error('Failed to load completed structure file.');
+                }
+                completedText = await completedResponse.text();
+            }
+
+            // Initialize NGL stage for superimposed view if not already done
+            if (!this.superimposedNglStage) {
+                this.superimposedNglStage = new NGL.Stage("superimposed-ngl-viewer", {
+                    backgroundColor: "white",
+                    quality: "medium"
+                });
+            }
+
+            // Clear existing components
+            this.superimposedNglStage.removeAllComponents();
+
+            // Create blobs from PDB content
+            const originalBlob = new Blob([originalText], { type: 'text/plain' });
+            const completedBlob = new Blob([completedText], { type: 'text/plain' });
+            const originalUrl = URL.createObjectURL(originalBlob);
+            const completedUrl = URL.createObjectURL(completedBlob);
+
+            // Load original structure with original colors
+            const originalComponent = await this.superimposedNglStage.loadFile(originalUrl, {
+                ext: "pdb",
+                defaultRepresentation: false
+            });
+
+            // Apply original chain colors if available
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                const structureChains = this.currentProtein && this.currentProtein.chains ? this.currentProtein.chains : [];
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        originalComponent.addRepresentation("cartoon", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.8
+                        });
+                    }
+                });
+            } else {
+                // Fallback: use chainid
+                originalComponent.addRepresentation("cartoon", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.8
+                });
+            }
+
+            // Load completed structure with different colors
+            const completedComponent = await this.superimposedNglStage.loadFile(completedUrl, {
+                ext: "pdb",
+                defaultRepresentation: false
+            });
+
+            // Get chains from completed structure - parse from PDB content or use original chains
+            const completedChains = [];
+            
+            // Method 1: Parse chain IDs from PDB content
+            const chainSet = new Set();
+            const lines = completedText.split('\n');
+            for (const line of lines) {
+                if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+                    const chainId = line.charAt(21); // Chain ID is at position 21
+                    if (chainId && chainId.trim() !== '') {
+                        chainSet.add(chainId);
+                    }
+                }
+            }
+            completedChains.push(...Array.from(chainSet).sort());
+            
+            // Method 2: Fallback to original structure chains if parsing didn't work
+            if (completedChains.length === 0 && this.currentProtein && this.currentProtein.chains) {
+                completedChains.push(...this.currentProtein.chains);
+            }
+            
+            // Use a different color scheme for completed structure
+            const completedColors = {
+                'A': 'orange',
+                'B': 'purple',
+                'C': 'pink',
+                'D': 'cyan',
+                'E': 'yellow',
+                'F': 'magenta',
+                'G': 'lime',
+                'H': 'coral'
+            };
+
+            if (completedChains.length > 0) {
+                completedChains.forEach((chain, index) => {
+                    // Use different colors for completed structure
+                    const color = completedColors[chain] || `hsl(${(index * 60) % 360}, 70%, 50%)`;
+                    completedComponent.addRepresentation("cartoon", {
+                        sele: `:${chain}`,
+                        color: color,
+                        opacity: 0.7
+                    });
+                });
+            } else {
+                // Fallback: use chainid color scheme if we can't determine chains
+                completedComponent.addRepresentation("cartoon", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.7
+                });
+            }
+
+            // Store completed chains for later use in toggle functions
+            this.completedChains = completedChains;
+
+            // Auto-fit the view
+            this.superimposedNglStage.autoView();
+
+            // Show controls
+            document.getElementById('superimposed-viewer-controls').style.display = 'flex';
+
+            // Clean up blob URLs
+            URL.revokeObjectURL(originalUrl);
+            URL.revokeObjectURL(completedUrl);
+
+            // Store components for control functions
+            this.superimposedOriginalComponent = originalComponent;
+            this.superimposedCompletedComponent = completedComponent;
+            this.superimposedRepresentationType = 'cartoon';
+            this.superimposedIsSpinning = false;
+
+        } catch (error) {
+            console.error('Error loading superimposed structures:', error);
+            alert('Error loading superimposed visualization: ' + error.message);
+        }
+    }
+
+    resetSuperimposedView() {
+        if (this.superimposedNglStage) {
+            this.superimposedNglStage.autoView();
+        }
+    }
+
+    toggleSuperimposedRepresentation() {
+        if (!this.superimposedOriginalComponent || !this.superimposedCompletedComponent) {
+            return;
+        }
+
+        // Remove existing representations
+        this.superimposedOriginalComponent.removeAllRepresentations();
+        this.superimposedCompletedComponent.removeAllRepresentations();
+
+        const styleText = document.getElementById('superimposed-style-text');
+        
+        if (this.superimposedRepresentationType === 'cartoon') {
+            // Switch to surface
+            this.superimposedRepresentationType = 'surface';
+            styleText.textContent = 'Surface';
+            
+            // Original structure
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                const structureChains = this.currentProtein && this.currentProtein.chains ? this.currentProtein.chains : [];
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        this.superimposedOriginalComponent.addRepresentation("surface", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.6
+                        });
+                    }
+                });
+            } else {
+                this.superimposedOriginalComponent.addRepresentation("surface", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.6
+                });
+            }
+
+            // Completed structure - use stored chains or original chains
+            let completedChains = [];
+            
+            // Try to get from stored completed chains (if we stored them)
+            if (this.completedChains && this.completedChains.length > 0) {
+                completedChains = this.completedChains;
+            } else if (this.currentProtein && this.currentProtein.chains) {
+                // Fallback to original chains
+                completedChains = this.currentProtein.chains;
+            }
+            
+            const completedColors = {
+                'A': 'orange',
+                'B': 'purple',
+                'C': 'pink',
+                'D': 'cyan',
+                'E': 'yellow',
+                'F': 'magenta',
+                'G': 'lime',
+                'H': 'coral'
+            };
+            
+            if (completedChains.length > 0) {
+                completedChains.forEach((chain, index) => {
+                    const color = completedColors[chain] || `hsl(${(index * 60) % 360}, 70%, 50%)`;
+                    this.superimposedCompletedComponent.addRepresentation("surface", {
+                        sele: `:${chain}`,
+                        color: color,
+                        opacity: 0.5
+                    });
+                });
+            } else {
+                // Fallback: use chainid color scheme
+                this.superimposedCompletedComponent.addRepresentation("surface", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.5
+                });
+            }
+        } else {
+            // Switch to cartoon
+            this.superimposedRepresentationType = 'cartoon';
+            styleText.textContent = 'Cartoon';
+            
+            // Original structure
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                const structureChains = this.currentProtein && this.currentProtein.chains ? this.currentProtein.chains : [];
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        this.superimposedOriginalComponent.addRepresentation("cartoon", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.8
+                        });
+                    }
+                });
+            } else {
+                this.superimposedOriginalComponent.addRepresentation("cartoon", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.8
+                });
+            }
+
+            // Completed structure - use stored chains or original chains
+            let completedChains = [];
+            
+            // Try to get from stored completed chains (if we stored them)
+            if (this.completedChains && this.completedChains.length > 0) {
+                completedChains = this.completedChains;
+            } else if (this.currentProtein && this.currentProtein.chains) {
+                // Fallback to original chains
+                completedChains = this.currentProtein.chains;
+            }
+            
+            const completedColors = {
+                'A': 'orange',
+                'B': 'purple',
+                'C': 'pink',
+                'D': 'cyan',
+                'E': 'yellow',
+                'F': 'magenta',
+                'G': 'lime',
+                'H': 'coral'
+            };
+            
+            if (completedChains.length > 0) {
+                completedChains.forEach((chain, index) => {
+                    const color = completedColors[chain] || `hsl(${(index * 60) % 360}, 70%, 50%)`;
+                    this.superimposedCompletedComponent.addRepresentation("cartoon", {
+                        sele: `:${chain}`,
+                        color: color,
+                        opacity: 0.7
+                    });
+                });
+            } else {
+                // Fallback: use chainid color scheme
+                this.superimposedCompletedComponent.addRepresentation("cartoon", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.7
+                });
+            }
+        }
+    }
+
+    toggleSuperimposedSpin() {
+        if (!this.superimposedNglStage) {
+            return;
+        }
+        this.superimposedIsSpinning = !this.superimposedIsSpinning;
+        this.superimposedNglStage.setSpin(this.superimposedIsSpinning);
     }
 
     async loadCompletedStructureViewer() {

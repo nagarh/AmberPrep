@@ -2082,6 +2082,45 @@ def get_completed_structure():
             'error': str(e)
         }), 500
 
+@app.route('/api/get-file', methods=['GET'])
+def get_file():
+    """Get a file from the output directory"""
+    try:
+        filename = request.args.get('filename')
+        if not filename:
+            return jsonify({
+                'success': False,
+                'error': 'Filename parameter required'
+            }), 400
+        
+        # Security: only allow files from output directory
+        file_path = OUTPUT_DIR / filename
+        
+        # Prevent directory traversal
+        if not str(file_path).startswith(str(OUTPUT_DIR)):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid file path'
+            }), 400
+        
+        if not file_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'File {filename} not found'
+            }), 404
+        
+        # Read file content
+        with open(file_path, 'r') as f:
+            content = f.read()
+        
+        return content, 200, {'Content-Type': 'text/plain'}
+    except Exception as e:
+        logger.error(f"Error reading file {filename}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 if __name__ == '__main__':
     print("🧬 MD Simulation Pipeline")
     print("=========================")
