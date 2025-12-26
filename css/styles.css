@@ -1054,6 +1054,13 @@ input:checked + .slider:before {
     padding: 1.5rem;
     border: 1px solid #dee2e6;
     margin-top: 2rem;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+#sequence-viewer-section {
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .prepared-structure-preview h3 {
@@ -1164,6 +1171,85 @@ input:checked + .slider:before {
 .chain-missing-info h4 {
     color: #155724;
     margin-bottom: 0.5rem;
+}
+
+/* Sequence Viewer Styles */
+.sequence-viewer-container {
+    background: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 1.5rem;
+    max-height: 600px;
+    overflow-y: auto;
+    font-family: 'Courier New', monospace;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.sequence-chain-container {
+    margin-bottom: 2rem;
+    border-bottom: 2px solid #e9ecef;
+    padding-bottom: 1.5rem;
+}
+
+.sequence-chain-container:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+}
+
+.sequence-chain-header {
+    margin-bottom: 1rem;
+}
+
+.sequence-chain-header h4 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.sequence-display {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 1rem;
+    font-size: 14px;
+    line-height: 1.8;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.sequence-line {
+    display: flex;
+    margin-bottom: 2px;
+    white-space: nowrap;
+}
+
+.sequence-line-number {
+    color: #6c757d;
+    margin-right: 1rem;
+    min-width: 60px;
+    text-align: right;
+    font-size: 12px;
+    user-select: none;
+}
+
+.sequence-characters {
+    letter-spacing: 2px;
+    word-spacing: 0;
+    flex: 1;
+    overflow-x: auto;
+    min-width: 0;
+}
+
+.sequence-char {
+    display: inline-block;
+    padding: 2px 1px;
+    transition: background-color 0.2s;
+}
+
+.sequence-char:hover {
+    background-color: rgba(0, 0, 0, 0.1);
+    border-radius: 2px;
 }
 
 /* Trim Residues Section */

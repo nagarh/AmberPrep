@@ -139,6 +139,10 @@ class MDSimulationPipeline {
         if (previewSuperimposedBtn) {
             previewSuperimposedBtn.addEventListener('click', () => this.previewSuperimposedStructure());
         }
+        const viewSequencesBtn = document.getElementById('view-protein-sequences');
+        if (viewSequencesBtn) {
+            viewSequencesBtn.addEventListener('click', () => this.toggleSequenceViewer());
+        }
         const downloadCompletedBtn = document.getElementById('download-completed-structure');
         if (downloadCompletedBtn) {
             downloadCompletedBtn.addEventListener('click', () => this.downloadCompletedStructure());
@@ -2173,6 +2177,11 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 this.missingResiduesInfo = result.missing_residues;
                 this.missingResiduesPdbId = result.pdb_id;
                 this.chainSequences = result.chain_sequences || {};
+                this.chainSequenceStart = result.chain_sequence_start || {};
+                this.chainFirstResidue = result.chain_first_residue || {};
+                
+                // Parse PDB content to get last residue numbers for each chain
+                this.chainLastResidue = this.parseLastResidueNumbers();
 
                 if (Object.keys(result.missing_residues).length === 0) {
                     this.showMissingStatus('success', 'No missing residues detected in this structure!');
@@ -2187,6 +2196,7 @@ echo "Analysis completed! Results saved in analysis/ directory"
                     document.getElementById('missing-summary').style.display = 'block';
                     this.displayMissingSummary(result.missing_residues);
                     this.renderTrimControls(result.chains_with_missing);
+                    this.renderSequenceViewer(result.chain_sequences, result.missing_residues);
                 }
             } else {
                 throw new Error(result.error || 'Failed to detect missing residues');
@@ -2263,10 +2273,235 @@ echo "Analysis completed! Results saved in analysis/ directory"
         summaryContent.innerHTML = html;
     }
 
+    renderSequenceViewer(chainSequences, missingResidues) {
+        if (!chainSequences || Object.keys(chainSequences).length === 0) {
+            return;
+        }
+
+        // Store sequences and missing residues for later use
+        this.sequenceViewerData = {
+            chainSequences: chainSequences,
+            missingResidues: missingResidues,
+            chainSequenceStart: this.chainSequenceStart || {}
+        };
+        
+        // Show the button to view sequences
+        document.getElementById('sequence-viewer-actions').style.display = 'flex';
+        
+        // Don't show the viewer by default - user clicks button to view
+        document.getElementById('sequence-viewer-section').style.display = 'none';
+    }
+
+    toggleSequenceViewer() {
+        const viewerSection = document.getElementById('sequence-viewer-section');
+        const viewBtn = document.getElementById('view-protein-sequences');
+        
+        if (!this.sequenceViewerData) {
+            alert('No sequence data available. Please detect missing residues first.');
+            return;
+        }
+        
+        if (viewerSection.style.display === 'none' || viewerSection.style.display === '') {
+            // Show the viewer
+            this.displaySequenceViewer(
+                this.sequenceViewerData.chainSequences,
+                this.sequenceViewerData.missingResidues,
+                this.sequenceViewerData.chainSequenceStart
+            );
+            viewerSection.style.display = 'block';
+            viewBtn.innerHTML = '<i class="fas fa-eye-slash"></i> Hide Protein Sequences';
+            viewBtn.classList.remove('btn-secondary');
+            viewBtn.classList.add('btn-outline-secondary');
+        } else {
+            // Hide the viewer
+            viewerSection.style.display = 'none';
+            viewBtn.innerHTML = '<i class="fas fa-dna"></i> View Protein Sequences';
+            viewBtn.classList.remove('btn-outline-secondary');
+            viewBtn.classList.add('btn-secondary');
+        }
+    }
+
+    getThreeLetterCode(oneLetterCode) {
+        // Map one-letter amino acid codes to three-letter codes
+        const aaMap = {
+            'A': 'ALA', 'R': 'ARG', 'N': 'ASN', 'D': 'ASP', 'C': 'CYS',
+            'Q': 'GLN', 'E': 'GLU', 'G': 'GLY', 'H': 'HIS', 'I': 'ILE',
+            'L': 'LEU', 'K': 'LYS', 'M': 'MET', 'F': 'PHE', 'P': 'PRO',
+            'S': 'SER', 'T': 'THR', 'W': 'TRP', 'Y': 'TYR', 'V': 'VAL',
+            'B': 'ASX', 'Z': 'GLX', 'X': 'XXX', 'U': 'SEC', 'O': 'PYL'
+        };
+        return aaMap[oneLetterCode.toUpperCase()] || oneLetterCode;
+    }
+
+    displaySequenceViewer(chainSequences, missingResidues, chainSequenceStart = {}) {
+        const container = document.getElementById('sequence-viewer-content');
+        if (!container || !chainSequences || Object.keys(chainSequences).length === 0) {
+            return;
+        }
+
+        container.innerHTML = '';
+
+        Object.keys(chainSequences).sort().forEach(chain => {
+            const sequence = chainSequences[chain];
+            const missingInfo = missingResidues[chain];
+            // Store missing residues as PDB residue numbers (1-indexed) for direct comparison
+            // We'll compare these with the calculated residueNum (sequenceStart + pos)
+            const missingResNums = missingInfo && missingInfo.residues 
+                ? new Set(missingInfo.residues.map(([resname, resnum]) => resnum))
+                : new Set();
+            
+            // Get the starting residue number for sequence display
+            // This is the first residue number that should be displayed in the viewer
+            // e.g., if PDB starts at 189 but residues 173-188 are missing,
+            // sequenceStart = 173 (the first missing residue before PDB start)
+            const sequenceStart = chainSequenceStart[chain] || 1;
+            
+            // The canonical sequence from RCSB always starts at residue 1
+            // So sequence position 0 = residue 1, position 172 = residue 173, etc.
+            // To display starting from residue 173, we calculate: residueNum = sequenceStart + pos
+            // But we need to account for the offset: if sequenceStart = 173, and pos = 0, residueNum = 173
+            // This means: residueNum = sequenceStart + pos - (sequenceStart - 1) = pos + 1
+            // Actually, if we want pos 0 to show residue 173, then: residueNum = sequenceStart + pos
+            // But sequence position 0 corresponds to residue 1 in canonical sequence
+            // So we need: residueNum = sequenceStart + pos - (sequenceStart - 1) = pos + 1? No...
+            
+            // Actually, the simplest approach: if sequenceStart = 173, it means we want to show
+            // residue numbers starting from 173. Since canonical sequence pos 0 = residue 1,
+            // we need: residueNum = (sequenceStart - 1) + pos + 1 = sequenceStart + pos
+            // Wait, that's what we have. Let me verify:
+            // - If sequenceStart = 173, pos = 0: residueNum = 173 + 0 = 173 ✓
+            // - If sequenceStart = 173, pos = 1: residueNum = 173 + 1 = 174 ✓
+            // This seems correct!
+            // But the canonical sequence includes all residues, so we use canonical numbering (position + 1)
+
+            // Get chain color from chainColorMap, fallback to default
+            const chainColor = this.chainColorMap && this.chainColorMap[chain] 
+                ? this.chainColorMap[chain] 
+                : '#6c757d'; // Default grey if no color map
+
+            const chainDiv = document.createElement('div');
+            chainDiv.className = 'sequence-chain-container';
+            
+            const header = document.createElement('div');
+            header.className = 'sequence-chain-header';
+            header.innerHTML = `
+                <h4 style="color: ${chainColor};">
+                    <i class="fas fa-link"></i> Chain ${chain} 
+                    <span style="font-size: 0.85em; font-weight: normal; color: #6c757d;">
+                        (${sequence.length} residues${missingInfo ? `, ${missingInfo.count} missing` : ''})
+                    </span>
+                </h4>
+            `;
+            chainDiv.appendChild(header);
+
+            const sequenceDiv = document.createElement('div');
+            sequenceDiv.className = 'sequence-display';
+            
+            // Split sequence into chunks of 80 characters for display (more characters per line for better width utilization)
+            const chunkSize = 80;
+            for (let i = 0; i < sequence.length; i += chunkSize) {
+                const chunk = sequence.substring(i, i + chunkSize);
+                const chunkDiv = document.createElement('div');
+                chunkDiv.className = 'sequence-line';
+                
+                // Add line number using actual residue numbering (accounting for missing residues)
+                const lineNum = document.createElement('span');
+                lineNum.className = 'sequence-line-number';
+                // Calculate residue number: sequenceStart + position in sequence
+                const residueNum = sequenceStart + i;
+                lineNum.textContent = String(residueNum).padStart(5, ' ');
+                chunkDiv.appendChild(lineNum);
+
+                // Add sequence characters
+                const seqSpan = document.createElement('span');
+                seqSpan.className = 'sequence-characters';
+                
+                for (let j = 0; j < chunk.length; j++) {
+                    const char = chunk[j];
+                    const pos = i + j;
+                    // Calculate actual residue number: sequenceStart + position
+                    const residueNum = sequenceStart + pos;
+                    const charSpan = document.createElement('span');
+                    charSpan.className = 'sequence-char';
+                    
+                    // Get three-letter code for tooltip
+                    const threeLetterCode = this.getThreeLetterCode(char);
+                    
+                    // Check if this residue number is missing (using PDB residue numbers)
+                    if (missingResNums.has(residueNum)) {
+                        charSpan.style.color = '#6c757d'; // Grey for missing
+                        charSpan.style.backgroundColor = '#f0f0f0';
+                        charSpan.style.fontWeight = 'bold';
+                        charSpan.title = `Missing residue ${threeLetterCode} at position ${residueNum}`;
+                    } else {
+                        charSpan.style.color = chainColor; // Chain color for present residues
+                        charSpan.title = `Residue ${threeLetterCode} at position ${residueNum}`;
+                    }
+                    
+                    charSpan.textContent = char;
+                    seqSpan.appendChild(charSpan);
+                }
+                
+                chunkDiv.appendChild(seqSpan);
+                sequenceDiv.appendChild(chunkDiv);
+            }
+            
+            chainDiv.appendChild(sequenceDiv);
+            container.appendChild(chainDiv);
+        });
+    }
+
+    parseLastResidueNumbers() {
+        /**
+         * Parse PDB content to extract the last residue number for each chain
+         * Returns: { chainId: lastResidueNumber }
+         */
+        const chainLastResidue = {};
+        
+        if (!this.currentProtein || !this.currentProtein.content) {
+            return chainLastResidue;
+        }
+        
+        const lines = this.currentProtein.content.split('\n');
+        const chainResidues = {}; // { chainId: Set of residue numbers }
+        
+        for (const line of lines) {
+            if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+                const chainId = line.substring(21, 22).trim();
+                if (!chainId) continue;
+                
+                // Extract residue number (columns 22-26, handling insertion codes)
+                const residueStr = line.substring(22, 26).trim();
+                const match = residueStr.match(/^(\d+)/);
+                if (match) {
+                    const residueNum = parseInt(match[1], 10);
+                    
+                    if (!chainResidues[chainId]) {
+                        chainResidues[chainId] = new Set();
+                    }
+                    chainResidues[chainId].add(residueNum);
+                }
+            }
+        }
+        
+        // Find the maximum residue number for each chain
+        for (const [chainId, residueSet] of Object.entries(chainResidues)) {
+            if (residueSet.size > 0) {
+                chainLastResidue[chainId] = Math.max(...Array.from(residueSet));
+            }
+        }
+        
+        return chainLastResidue;
+    }
+
     analyzeEdgeResidues(chain, missingResidues) {
         /**
          * Analyze missing residues to determine which ones are at edges
          * Returns: { n_terminal: {start, end, count}, c_terminal: {start, end, count} }
+         * 
+         * A missing residue is at the edge ONLY if:
+         * - N-terminal: There are NO residues present in the PDB BEFORE the first missing residue
+         * - C-terminal: There are NO residues present in the PDB AFTER the last missing residue
          */
         if (!missingResidues || !missingResidues[chain] || !missingResidues[chain].residues) {
             return { n_terminal: null, c_terminal: null };
@@ -2274,6 +2509,16 @@ echo "Analysis completed! Results saved in analysis/ directory"
 
         const residues = missingResidues[chain].residues;
         if (residues.length === 0) {
+            return { n_terminal: null, c_terminal: null };
+        }
+
+        // Get actual first and last residue numbers from PDB
+        const firstPdbResidue = this.chainFirstResidue && this.chainFirstResidue[chain];
+        const lastPdbResidue = this.chainLastResidue && this.chainLastResidue[chain];
+        
+        // If we don't have PDB residue info, fall back to old logic (but this shouldn't happen)
+        if (firstPdbResidue === undefined || lastPdbResidue === undefined) {
+            console.warn(`Missing PDB residue info for chain ${chain}, using fallback logic`);
             return { n_terminal: null, c_terminal: null };
         }
 
@@ -2301,12 +2546,15 @@ echo "Analysis completed! Results saved in analysis/ directory"
             ranges.push({ start: rangeStart, end: rangeEnd });
         }
 
-        // Identify N-terminal edge (first range if it starts from a low number, typically 0 or 1)
+        // Identify N-terminal edge
+        // A missing residue is N-terminal ONLY if the first missing residue is BEFORE or AT the first PDB residue
+        // AND there are no residues present before the first missing residue
         let nTerminal = null;
         if (ranges.length > 0) {
             const firstRange = ranges[0];
-            // Consider it N-terminal if it starts from 0 or 1 (common in PDB files)
-            if (firstRange.start <= 1) {
+            // Check if the first missing residue is at or before the first PDB residue
+            // This means there are no residues present before the missing residues
+            if (firstRange.start <= firstPdbResidue) {
                 nTerminal = {
                     start: firstRange.start,
                     end: firstRange.end,
@@ -2315,42 +2563,20 @@ echo "Analysis completed! Results saved in analysis/ directory"
             }
         }
 
-        // Identify C-terminal edge (last range)
-        // We consider it C-terminal if:
-        // 1. There are multiple ranges (the last one is likely C-terminal since there are internal gaps)
-        // 2. OR if there's only one range but it's not N-terminal (could be C-terminal only)
+        // Identify C-terminal edge
+        // A missing residue is C-terminal ONLY if the last missing residue is AFTER or AT the last PDB residue
+        // AND there are no residues present after the last missing residue
         let cTerminal = null;
         if (ranges.length > 0) {
             const lastRange = ranges[ranges.length - 1];
-            
-            if (ranges.length > 1) {
-                // Multiple ranges - the last one is likely C-terminal (there are internal missing residues)
+            // Check if the last missing residue is at or after the last PDB residue
+            // This means there are no residues present after the missing residues
+            if (lastRange.end >= lastPdbResidue) {
                 cTerminal = {
                     start: lastRange.start,
                     end: lastRange.end,
                     count: lastRange.end - lastRange.start + 1
                 };
-            } else if (nTerminal === null) {
-                // Only one range and it's not N-terminal
-                // Check if sequence length is available to verify it's at the end
-                const seqLength = this.chainSequences[chain] ? this.chainSequences[chain].length : 0;
-                if (seqLength > 0 && lastRange.end >= seqLength - 5) {
-                    // If the range ends within 5 residues of the sequence end, consider it C-terminal
-                    cTerminal = {
-                        start: lastRange.start,
-                        end: lastRange.end,
-                        count: lastRange.end - lastRange.start + 1
-                    };
-                } else if (lastRange.start > 10) {
-                    // If the range starts well after the beginning (not N-terminal), 
-                    // and there's only one range, it might be C-terminal
-                    // But be conservative - only if it's clearly not at the start
-                    cTerminal = {
-                        start: lastRange.start,
-                        end: lastRange.end,
-                        count: lastRange.end - lastRange.start + 1
-                    };
-                }
             }
         }
 
@@ -2432,7 +2658,7 @@ echo "Analysis completed! Results saved in analysis/ directory"
             if (edges.c_terminal) {
                 cTerminalLabel += ` <span class="trim-limit">(max: ${cTerminalMax})</span>`;
             } else {
-                cTerminalLabel += ` <span class="trim-limit" style="color: #6c757d; font-style: italic;">(no missingresidues)</span>`;
+                cTerminalLabel += ` <span class="trim-limit" style="color: #6c757d; font-style: italic;">(no missing residues)</span>`;
             }
 
             const wrapper = document.createElement('div');

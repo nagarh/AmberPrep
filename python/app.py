@@ -1773,12 +1773,69 @@ def detect_missing_residues_endpoint():
                 'residues': missing_list
             }
         
+        # Get first residue number for each chain from the PDB file
+        # Also calculate the starting residue number for the sequence viewer
+        # (accounting for missing residues before the first PDB residue)
+        chain_first_residue = {}
+        chain_sequence_start = {}
+        try:
+            original_pdb_path = OUTPUT_DIR / "0_original_input.pdb"
+            if original_pdb_path.exists():
+                with open(original_pdb_path, 'r') as f:
+                    pdb_lines = f.readlines()
+                    
+                # First pass: find first residue number for each chain
+                for line in pdb_lines:
+                    if line.startswith('ATOM') or line.startswith('HETATM'):
+                        chain_id = line[21:22].strip()
+                        if chain_id and chain_id not in chain_first_residue:
+                            # Extract residue number (columns 22-26, but we need to handle insertion codes)
+                            residue_str = line[22:26].strip()
+                            try:
+                                # Try to extract just the number part
+                                import re
+                                match = re.match(r'(\d+)', residue_str)
+                                if match:
+                                    residue_num = int(match.group(1))
+                                    chain_first_residue[chain_id] = residue_num
+                            except:
+                                pass
+                
+                # Second pass: calculate sequence start for each chain
+                # We want to find the first residue number that should be displayed
+                # This is the first PDB residue minus the count of missing residues before it
+                # Example: If PDB starts at 189 and residues 173-188 are missing (16 residues),
+                # then sequence_start = 189 - 16 = 173
+                for chain_id, first_pdb_residue in chain_first_residue.items():
+                    # Find the minimum missing residue number before first_pdb_residue
+                    # This tells us where the sequence should start displaying
+                    min_missing_before = None
+                    if chain_id in missing_info:
+                        for resname, resnum in missing_info[chain_id]['residues']:
+                            if resnum < first_pdb_residue:
+                                if min_missing_before is None or resnum < min_missing_before:
+                                    min_missing_before = resnum
+                    
+                    if min_missing_before is not None:
+                        # Sequence should start from the first missing residue before PDB start
+                        # This accounts for all missing residues before the first PDB residue
+                        sequence_start = min_missing_before
+                    else:
+                        # No missing residues before first PDB residue, start from first PDB residue
+                        sequence_start = first_pdb_residue
+                    
+                    chain_sequence_start[chain_id] = sequence_start
+        except Exception as e:
+            logger.warning(f"Could not determine first residue numbers: {str(e)}")
+        
         return jsonify({
             'success': True,
             'pdb_id': pdb_id,
             'missing_residues': missing_info,
             'chains_with_missing': list(chains_with_missing.keys()),
-            'chain_sequences': chain_sequences
+            'chain_sequences': chain_sequences,
+            'chain_first_residue': chain_first_residue,
+            'chain_sequence_start': chain_sequence_start
         })
         
     except Exception as e:

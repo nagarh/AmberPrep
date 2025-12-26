@@ -196,6 +196,22 @@
                         </div>
                     </div>
 
+                    <div class="prep-actions" id="sequence-viewer-actions" style="display: none; margin-top: 1rem;">
+                        <button class="btn btn-secondary" id="view-protein-sequences">
+                            <i class="fas fa-dna"></i> View Protein Sequences
+                        </button>
+                    </div>
+
+                    <div class="prepared-structure-preview" id="sequence-viewer-section" style="display: none;">
+                        <h3><i class="fas fa-dna"></i> Protein Sequence Viewer</h3>
+                        <p class="card-description" style="margin-bottom: 15px;">
+                            View protein sequences for all chains. Chain colors match the structure visualization. Missing residues are shown in grey.
+                        </p>
+                        <div id="sequence-viewer-content" class="sequence-viewer-container">
+                            <!-- Sequence viewer will be rendered here -->
+                        </div>
+                    </div>
+
                     <div class="prepared-structure-preview" id="completed-structure-preview" style="display: none;">
                         <h3><i class="fas fa-eye"></i> Structure Comparison Preview</h3>
                         <p class="card-description" style="margin-bottom: 15px;">
