@@ -2423,12 +2423,16 @@ echo "Analysis completed! Results saved in analysis/ directory"
             let nTerminalLabel = 'N-terminal:';
             if (edges.n_terminal) {
                 nTerminalLabel += ` <span class="trim-limit">(max: ${nTerminalMax})</span>`;
+            } else {
+                nTerminalLabel += ` <span class="trim-limit" style="color: #6c757d; font-style: italic;">(no missing residues)</span>`;
             }
             
             // Build C-terminal label with limit info
             let cTerminalLabel = 'C-terminal:';
             if (edges.c_terminal) {
                 cTerminalLabel += ` <span class="trim-limit">(max: ${cTerminalMax})</span>`;
+            } else {
+                cTerminalLabel += ` <span class="trim-limit" style="color: #6c757d; font-style: italic;">(no missingresidues)</span>`;
             }
 
             const wrapper = document.createElement('div');
@@ -2442,10 +2446,11 @@ echo "Analysis completed! Results saved in analysis/ directory"
                                id="trim-n-${chain}" 
                                data-chain="${chain}" 
                                min="0" 
-                               max="${nTerminalMax > 0 ? nTerminalMax : seqLength - 1}" 
+                               max="${nTerminalMax}" 
                                value="0"
                                class="trim-n-input"
-                               ${nTerminalMax > 0 ? `data-max-edge="${nTerminalMax}"` : ''}>
+                               ${nTerminalMax > 0 ? `data-max-edge="${nTerminalMax}"` : 'disabled'}
+                               ${nTerminalMax === 0 ? 'style="background-color: #e9ecef; cursor: not-allowed;"' : ''}>
                         <span>residues</span>
                     </div>
                     <div class="trim-input-group">
@@ -2454,10 +2459,11 @@ echo "Analysis completed! Results saved in analysis/ directory"
                                id="trim-c-${chain}" 
                                data-chain="${chain}" 
                                min="0" 
-                               max="${cTerminalMax > 0 ? cTerminalMax : seqLength - 1}" 
+                               max="${cTerminalMax}" 
                                value="0"
                                class="trim-c-input"
-                               ${cTerminalMax > 0 ? `data-max-edge="${cTerminalMax}"` : ''}>
+                               ${cTerminalMax > 0 ? `data-max-edge="${cTerminalMax}"` : 'disabled'}
+                               ${cTerminalMax === 0 ? 'style="background-color: #e9ecef; cursor: not-allowed;"' : ''}>
                         <span>residues</span>
                     </div>
                 </div>
@@ -2472,7 +2478,7 @@ echo "Analysis completed! Results saved in analysis/ directory"
             const cInput = wrapper.querySelector(`#trim-c-${chain}`);
             const infoDiv = wrapper.querySelector(`#trim-info-${chain}`);
 
-            // Enforce max limits based on edge residues
+            // Enforce max limits based on edge residues (only if there are edge residues)
             if (nTerminalMax > 0) {
                 nInput.addEventListener('input', () => {
                     const value = parseInt(nInput.value) || 0;
@@ -2480,6 +2486,9 @@ echo "Analysis completed! Results saved in analysis/ directory"
                         nInput.value = nTerminalMax;
                     }
                 });
+            } else {
+                // Disable input if no edge residues
+                nInput.disabled = true;
             }
             
             if (cTerminalMax > 0) {
@@ -2489,6 +2498,9 @@ echo "Analysis completed! Results saved in analysis/ directory"
                         cInput.value = cTerminalMax;
                     }
                 });
+            } else {
+                // Disable input if no edge residues
+                cInput.disabled = true;
             }
 
             const updateInfo = () => {
@@ -2503,6 +2515,10 @@ echo "Analysis completed! Results saved in analysis/ directory"
                     warningMsg = `<span style="color: #dc3545;">Warning: N-terminal trim (${nTrim}) exceeds edge limit (${nTerminalMax})</span>`;
                 } else if (cTerminalMax > 0 && cTrim > cTerminalMax) {
                     warningMsg = `<span style="color: #dc3545;">Warning: C-terminal trim (${cTrim}) exceeds edge limit (${cTerminalMax})</span>`;
+                } else if (nTerminalMax === 0 && nTrim > 0) {
+                    warningMsg = `<span style="color: #dc3545;">Warning: No N-terminal edge residues to trim</span>`;
+                } else if (cTerminalMax === 0 && cTrim > 0) {
+                    warningMsg = `<span style="color: #dc3545;">Warning: No C-terminal edge residues to trim</span>`;
                 } else if (totalTrim >= seqLength) {
                     warningMsg = `<span style="color: #dc3545;">Error: Total trim (${totalTrim}) exceeds sequence length (${seqLength})</span>`;
                 } else if (newLength <= 0) {
@@ -2511,6 +2527,8 @@ echo "Analysis completed! Results saved in analysis/ directory"
                     let infoText = `Original: ${seqLength} residues → Trimmed: ${newLength} residues (removing ${nTrim} from N-term, ${cTrim} from C-term)`;
                     if (nTerminalMax > 0 || cTerminalMax > 0) {
                         infoText += `<br><small style="color: #6c757d;">Edge limits: N-term max ${nTerminalMax}, C-term max ${cTerminalMax}</small>`;
+                    } else {
+                        infoText += `<br><small style="color: #6c757d;">No edge residues available for trimming</small>`;
                     }
                     infoDiv.innerHTML = infoText;
                 }
