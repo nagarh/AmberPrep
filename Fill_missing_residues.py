@@ -42,8 +42,8 @@ def detect_missing_residues(pdb_id):
                 resname = parts[2]
                 chain = parts[3]
 
-                # Extract residue number (strip insertion code)
-                match = re.match(r"(\d+)", parts[4])
+                # Extract residue number (strip insertion code, handle negative numbers)
+                match = re.match(r"(-?\d+)", parts[4])
                 if match:
                     resnum = int(match.group(1))
                     missing_by_chain[chain].append((resname, resnum))
@@ -190,6 +190,64 @@ def run_esmfold(sequence):
     return response.text
 
 
+def merge_non_protein_atoms(original_pdb_path, protein_pdb_path, output_pdb_path, chains_to_replace):
+    """
+    Add non-protein atoms (water, ions, ligands) from original file to the completed protein structure.
+    
+    Parameters:
+    -----------
+    original_pdb_path : str
+        Path to the original PDB file
+    protein_pdb_path : str
+        Path to the temporary protein-only PDB file
+    output_pdb_path : str
+        Path where the final merged PDB will be written
+    chains_to_replace : list[str]
+        List of chain IDs that were replaced by ESMFold (not used, kept for compatibility)
+    """
+    import os
+    
+    # Extract non-protein atoms (HETATM records) from original PDB
+    non_protein_atoms = []
+    
+    if not os.path.exists(original_pdb_path):
+        print(f"Warning: Original PDB file not found: {original_pdb_path}")
+        # Just copy the protein file if original doesn't exist
+        if os.path.exists(protein_pdb_path):
+            import shutil
+            shutil.copy2(protein_pdb_path, output_pdb_path)
+        return
+    
+    # Read HETATM records from original PDB
+    with open(original_pdb_path, 'r') as f:
+        for line in f:
+            if line.startswith('HETATM'):
+                # Include all HETATM records (water, ions, ligands)
+                non_protein_atoms.append(line)
+    
+    # Read the completed protein structure
+    if not os.path.exists(protein_pdb_path):
+        print(f"Error: Protein PDB file not found: {protein_pdb_path}")
+        return
+    
+    # Write merged PDB file: protein structure + non-protein atoms
+    with open(output_pdb_path, 'w') as f:
+        # Write the completed protein structure (all lines except END)
+        with open(protein_pdb_path, 'r') as protein_file:
+            for line in protein_file:
+                if not line.startswith('END'):
+                    f.write(line)
+        
+        # Add non-protein atoms (water, ions, ligands) from original
+        for line in non_protein_atoms:
+            f.write(line)
+        
+        # Write END record at the very end
+        f.write("END                                                                             \n")
+    
+    print(f"✅ Added {len(non_protein_atoms)} non-protein atoms to completed structure")
+
+
 def rebuild_pdb_with_esmfold(
     pdb_id,
     chains_to_replace,
@@ -295,12 +353,31 @@ def rebuild_pdb_with_esmfold(
     cmd.select("final_model", selection)
 
     # -----------------------------
-    # 5. Save rebuilt structure
+    # 5. Save rebuilt structure (protein only)
     # -----------------------------
-    cmd.save(output_pdb, "final_model")
+    import os
+    temp_protein_pdb = output_pdb.replace('.pdb', '_protein_temp.pdb')
+    cmd.save(temp_protein_pdb, "final_model")
     
     # -----------------------------
-    # 6. Clean up temporary objects (keep final_model for potential reuse)
+    # 6. Add non-protein atoms from original PDB
+    # -----------------------------
+    print(f"Adding non-protein atoms from original file...")
+    # Convert paths to absolute paths if they're relative
+    abs_original = os.path.abspath(original_pdb_path) if original_pdb_path else None
+    abs_temp = os.path.abspath(temp_protein_pdb)
+    abs_output = os.path.abspath(output_pdb)
+    merge_non_protein_atoms(abs_original, abs_temp, abs_output, chains_to_replace)
+    
+    # Clean up temporary protein file
+    try:
+        if os.path.exists(temp_protein_pdb):
+            os.remove(temp_protein_pdb)
+    except Exception as e:
+        print(f"Warning: Could not remove temporary file {temp_protein_pdb}: {e}")
+    
+    # -----------------------------
+    # 7. Clean up temporary objects (keep final_model for potential reuse)
     # -----------------------------
     try:
         # Delete the original and ESMFold objects, but keep final_model

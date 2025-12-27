@@ -9,6 +9,9 @@ class MDSimulationPipeline {
         this.missingResiduesInfo = null;
         this.missingResiduesPdbId = null;
         this.chainSequences = null;
+        this.chainSequenceStart = {};
+        this.chainFirstResidue = {};
+        this.chainLastResidue = {};
         this.simulationParams = {};
         this.generatedFiles = {};
         this.nglStage = null;
@@ -436,7 +439,9 @@ class MDSimulationPipeline {
                     
                     const resName = line.substring(17, 20).trim();
                     const resNum = line.substring(22, 26).trim();
-                    residues.add(`${resName}${resNum}`);
+                    // Include chain ID in residue key to count residues across all chains
+                    const residueKey = chainId ? `${chainId}_${resName}${resNum}` : `${resName}${resNum}`;
+                    residues.add(residueKey);
                 } else if (line.startsWith('HETATM')) {
                     hetatoms++;
                     const resName = line.substring(17, 20).trim();
@@ -2260,8 +2265,15 @@ echo "Analysis completed! Results saved in analysis/ directory"
             html += `<h4>Chain ${chain}: ${info.count} missing residues</h4>`;
             if (info.residues && info.residues.length > 0) {
                 // Display all residues horizontally directly on green background
+                // Format negative numbers as GLY(-3) instead of GLY -3
                 const residueStrings = info.residues.map(
-                    ([resname, resnum]) => `${resname} ${resnum}`
+                    ([resname, resnum]) => {
+                        if (resnum < 0) {
+                            return `${resname}(${resnum})`;
+                        } else {
+                            return `${resname}${resnum}`;
+                        }
+                    }
                 );
                 html += '<p class="missing-residues-horizontal">';
                 html += residueStrings.join(', ');
@@ -2354,7 +2366,8 @@ echo "Analysis completed! Results saved in analysis/ directory"
             // This is the first residue number that should be displayed in the viewer
             // e.g., if PDB starts at 189 but residues 173-188 are missing,
             // sequenceStart = 173 (the first missing residue before PDB start)
-            const sequenceStart = chainSequenceStart[chain] || 1;
+            // Can be negative (e.g., -3) if PDB starts with negative residue numbers
+            const sequenceStart = chainSequenceStart[chain] !== undefined ? chainSequenceStart[chain] : 1;
             
             // The canonical sequence from RCSB always starts at residue 1
             // So sequence position 0 = residue 1, position 172 = residue 173, etc.
@@ -2409,7 +2422,13 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 lineNum.className = 'sequence-line-number';
                 // Calculate residue number: sequenceStart + position in sequence
                 const residueNum = sequenceStart + i;
-                lineNum.textContent = String(residueNum).padStart(5, ' ');
+                // Format with proper padding (handle negative numbers)
+                // For negative numbers, pad the absolute value and add sign
+                if (residueNum < 0) {
+                    lineNum.textContent = '-' + String(Math.abs(residueNum)).padStart(4, ' ');
+                } else {
+                    lineNum.textContent = String(residueNum).padStart(5, ' ');
+                }
                 chunkDiv.appendChild(lineNum);
 
                 // Add sequence characters
@@ -2466,13 +2485,14 @@ echo "Analysis completed! Results saved in analysis/ directory"
         const chainResidues = {}; // { chainId: Set of residue numbers }
         
         for (const line of lines) {
-            if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+            // Only look at ATOM records for protein chains (not HETATM for ligands/water)
+            if (line.startsWith('ATOM')) {
                 const chainId = line.substring(21, 22).trim();
                 if (!chainId) continue;
                 
-                // Extract residue number (columns 22-26, handling insertion codes)
+                // Extract residue number (columns 22-26, handling insertion codes and negative numbers)
                 const residueStr = line.substring(22, 26).trim();
-                const match = residueStr.match(/^(\d+)/);
+                const match = residueStr.match(/^(-?\d+)/);
                 if (match) {
                     const residueNum = parseInt(match[1], 10);
                     
@@ -2519,11 +2539,22 @@ echo "Analysis completed! Results saved in analysis/ directory"
         // If we don't have PDB residue info, fall back to old logic (but this shouldn't happen)
         if (firstPdbResidue === undefined || lastPdbResidue === undefined) {
             console.warn(`Missing PDB residue info for chain ${chain}, using fallback logic`);
+            console.warn(`chainFirstResidue:`, this.chainFirstResidue);
+            console.warn(`chainLastResidue:`, this.chainLastResidue);
             return { n_terminal: null, c_terminal: null };
         }
 
         // Extract residue numbers and sort
         const resNums = residues.map(([resname, resnum]) => resnum).sort((a, b) => a - b);
+        
+        // Debug logging (after resNums is declared)
+        console.log(`Chain ${chain} edge detection:`, {
+            firstPdbResidue,
+            lastPdbResidue,
+            missingResidueCount: residues.length,
+            firstMissing: resNums.length > 0 ? resNums[0] : null,
+            lastMissing: resNums.length > 0 ? resNums[resNums.length - 1] : null
+        });
         
         // Find all consecutive ranges
         const ranges = [];
@@ -2564,14 +2595,25 @@ echo "Analysis completed! Results saved in analysis/ directory"
         }
 
         // Identify C-terminal edge
-        // A missing residue is C-terminal ONLY if the last missing residue is AFTER or AT the last PDB residue
-        // AND there are no residues present after the last missing residue
+        // A missing residue is C-terminal ONLY if:
+        // 1. The missing residues extend beyond the last PDB residue (lastRange.end > lastPdbResidue)
+        //    This means there are no residues present after the missing residues
+        // 2. AND the missing residues start at or after the last PDB residue
+        //    (lastRange.start >= lastPdbResidue OR lastRange.start > lastPdbResidue)
+        // This ensures the missing residues are truly at the C-terminal edge with no gaps
         let cTerminal = null;
         if (ranges.length > 0) {
             const lastRange = ranges[ranges.length - 1];
-            // Check if the last missing residue is at or after the last PDB residue
-            // This means there are no residues present after the missing residues
-            if (lastRange.end >= lastPdbResidue) {
+            // Check if the missing residues extend beyond the last PDB residue
+            // AND start at or after the last PDB residue (no gap between last PDB and missing)
+            // This ensures there are no residues present after the missing residues
+            // Missing residues are at C-terminal edge if:
+            // 1. They extend beyond the last PDB residue (no residues after them)
+            // 2. They start at or right after the last PDB residue (no gap)
+            const extendsBeyond = lastRange.end > lastPdbResidue;
+            const noGap = lastRange.start <= lastPdbResidue + 1;
+            
+            if (extendsBeyond && noGap) {
                 cTerminal = {
                     start: lastRange.start,
                     end: lastRange.end,

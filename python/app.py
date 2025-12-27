@@ -1792,9 +1792,9 @@ def detect_missing_residues_endpoint():
                             # Extract residue number (columns 22-26, but we need to handle insertion codes)
                             residue_str = line[22:26].strip()
                             try:
-                                # Try to extract just the number part
+                                # Try to extract just the number part (handle negative numbers)
                                 import re
-                                match = re.match(r'(\d+)', residue_str)
+                                match = re.match(r'(-?\d+)', residue_str)
                                 if match:
                                     residue_num = int(match.group(1))
                                     chain_first_residue[chain_id] = residue_num
