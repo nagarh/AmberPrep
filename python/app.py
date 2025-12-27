@@ -1429,8 +1429,12 @@ def generate_all_files():
         # Generate mdin_equi.in (NPT Equilibration)
         generate_npt_equilibration_file(npt_equilibration_steps, temperature, pressure, cutoff_distance, dt)
         
+        # Check if plumed.dat exists in output folder
+        plumed_file = OUTPUT_DIR / 'plumed.dat'
+        use_plumed = plumed_file.exists()
+        
         # Generate mdin_prod.in (Production)
-        generate_production_file(production_steps, temperature, pressure, cutoff_distance, dt)
+        generate_production_file(production_steps, temperature, pressure, cutoff_distance, dt, use_plumed=use_plumed)
         
         # Generate force field parameters
         ff_files_generated = []
@@ -1474,7 +1478,7 @@ def generate_all_files():
             warnings.append(f"Force field generation error: {str(ff_error)}")
         
         # Generate PBS submit script into output
-        pbs_generated = generate_submit_pbs_file()
+        pbs_generated = generate_submit_pbs_file(use_plumed=use_plumed)
 
         all_files = [
             'min_restrained.in',
@@ -1485,7 +1489,7 @@ def generate_all_files():
         ] + ff_files_generated
 
         if pbs_generated:
-            all_files.append('submit_jobs.pbs')
+            all_files.append('submit_job.pbs')
         
         return jsonify({
             'success': True,
@@ -1628,7 +1632,7 @@ def generate_npt_equilibration_file(steps, temperature, pressure, cutoff, dt=0.0
     with open(OUTPUT_DIR / "mdin_equi.in", 'w') as f:
         f.write(content)
 
-def generate_production_file(steps, temperature, pressure, cutoff, dt=0.002):
+def generate_production_file(steps, temperature, pressure, cutoff, dt=0.002, use_plumed=False):
     """Generate mdin_prod.in file for production run"""
     content = f"""Production Run
 &cntrl
@@ -1654,28 +1658,60 @@ def generate_production_file(steps, temperature, pressure, cutoff, dt=0.002):
   ig=-1,
   iwrap=1,
   ntr=0,
-/
-
 """
+    
+    # Add PLUMED lines if plumed.dat exists
+    if use_plumed:
+        content += "  plumed=1,\n"
+        content += "  plumedfile='plumed.dat'\n"
+    
+    content += "/\n\n"
     
     with open(OUTPUT_DIR / "mdin_prod.in", 'w') as f:
         f.write(content)
 
-def generate_submit_pbs_file():
-    """Copy submit_jobs.pbs template into output folder"""
+def generate_submit_pbs_file(use_plumed=False):
+    """Generate submit_job.pbs file for SLURM job submission"""
     try:
-        templates_dir = Path("templates")
-        template_path = templates_dir / "submit_jobs.pbs"
-        if not template_path.exists():
-            logger.warning("submit_jobs.pbs template not found; skipping PBS generation")
-            return False
-        with open(template_path, 'r') as tf:
-            content = tf.read()
-        with open(OUTPUT_DIR / "submit_jobs.pbs", 'w') as outf:
-            outf.write(content)
+        # Get absolute path to output directory
+        output_dir_abs = OUTPUT_DIR.resolve()
+        
+        # Build PBS script content
+        content = """#!/bin/bash
+#SBATCH -D {working_dir}  # Critical: Sets working dir
+#SBATCH --job-name=job_name
+#SBATCH --partition=defq
+#SBATCH --get-user-env
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --gres=gpu:1
+#SBATCH --time=168:00:00
+
+
+module load amber/24
+""".format(working_dir=str(output_dir_abs))
+        
+        # Add PLUMED module if plumed.dat exists
+        if use_plumed:
+            content += "module load plumed/2.9.1\n"
+        
+        content += """
+pmemd.cuda -O -i min_restrained.in -o min_restrained.out -p protein.prmtop -c protein.inpcrd -r min_res.ncrst -x min_res.nc -ref Leu15_Glu15.inpcrd -inf min_res.mdinfo
+pmemd.cuda -O -i min.in -o min.out -p protein.prmtop -c min_res.ncrst -r min.ncrst -x min.nc -inf min.mdinfo
+pmemd.cuda -O -i HeatNPT.in -o HeatNPT.out -p protein.prmtop -c min.ncrst -r HeatNPT.ncrst -x HeatNPT.nc -inf HeatNPT.mdinfo
+pmemd.cuda -O -i mdin_equi.in -o mdin_equi.out -p protein.prmtop -c HeatNPT.ncrst -r mdin_equi.ncrst -x mdin_equi.nc -inf mdin_equi.mdinfo -ref HeatNPT.ncrst
+pmemd.cuda -O -i mdin_prod.in -o mdin_prod.out -p protein.prmtop -c mdin_equi.ncrst -r mdin_prod.ncrst -x mdin_prod.nc -inf mdin_prod.mdinfo -ref mdin_equi.ncrst
+"""
+        
+        # Write submit_job.pbs file
+        with open(OUTPUT_DIR / "submit_job.pbs", 'w') as f:
+            f.write(content)
+        
+        logger.info(f"Generated submit_job.pbs in {OUTPUT_DIR}")
         return True
     except Exception as e:
-        logger.error(f"Error generating submit_jobs.pbs: {e}")
+        logger.error(f"Error generating submit_job.pbs: {e}")
         return False
 
 @app.route('/api/health', methods=['GET'])
@@ -1783,7 +1819,8 @@ def get_generated_files():
             'min.in',
             'HeatNPT.in',
             'mdin_equi.in',
-            'mdin_prod.in'
+            'mdin_prod.in',
+            'submit_job.pbs'
         ]
         # Note: Force field parameter files (protein.prmtop, protein.inpcrd, protein_solvated.pdb) 
         # are excluded from preview as they are binary/large files

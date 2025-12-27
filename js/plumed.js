@@ -2559,6 +2559,224 @@ ves: VES ARG=distance SIGMA=0.1 PACE=500`,
                 }
             });
         }
+
+        // Generate Files button
+        const generateBtn = document.getElementById('plumed-generate-files');
+        if (generateBtn) {
+            generateBtn.addEventListener('click', () => {
+                this.generatePlumedFiles();
+            });
+        }
+
+        // Preview Files button
+        const previewBtn = document.getElementById('plumed-preview-files');
+        if (previewBtn) {
+            previewBtn.addEventListener('click', () => {
+                this.previewPlumedFiles();
+            });
+        }
+
+        // Download Files button
+        const downloadBtn = document.getElementById('plumed-download-files');
+        if (downloadBtn) {
+            downloadBtn.addEventListener('click', () => {
+                this.downloadPlumedFiles();
+            });
+        }
+    }
+
+    async generatePlumedFiles() {
+        // Check if plumed.dat exists
+        try {
+            const checkResponse = await fetch('/output/plumed.dat', { method: 'HEAD' });
+            if (!checkResponse.ok) {
+                alert('Please save a PLUMED file (plumed.dat) first before generating simulation files.');
+                return;
+            }
+        } catch (error) {
+            alert('Please save a PLUMED file (plumed.dat) first before generating simulation files.');
+            return;
+        }
+
+        // Get simulation parameters from the main form (if available)
+        const generateBtn = document.getElementById('plumed-generate-files');
+        const originalText = generateBtn.innerHTML;
+        generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+        generateBtn.disabled = true;
+
+        try {
+            // Get parameters from the main generate files form if available
+            // Otherwise use defaults
+            const params = {
+                cutoff_distance: 10.0,
+                temperature: 310.0,
+                pressure: 1.0,
+                restrained_steps: 10000,
+                restrained_force: 10.0,
+                min_steps: 20000,
+                npt_heating_steps: 50000,
+                npt_equilibration_steps: 100000,
+                production_steps: 1000000,
+                timestep: 0.002,
+                force_field: 'ff14SB',
+                water_model: 'TIP3P',
+                add_ions: 'None',
+                distance: 10.0
+            };
+
+            // Try to get values from main form if it exists
+            const cutoffInput = document.querySelector('input[name="cutoff_distance"], input[id*="cutoff"]');
+            const tempInput = document.querySelector('input[name="temperature"], input[id*="temperature"]');
+            const pressureInput = document.querySelector('input[name="pressure"], input[id*="pressure"]');
+            
+            if (cutoffInput) params.cutoff_distance = parseFloat(cutoffInput.value) || params.cutoff_distance;
+            if (tempInput) params.temperature = parseFloat(tempInput.value) || params.temperature;
+            if (pressureInput) params.pressure = parseFloat(pressureInput.value) || params.pressure;
+
+            const response = await fetch('/api/generate-all-files', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(params)
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                generateBtn.innerHTML = '<i class="fas fa-check"></i> Generated!';
+                generateBtn.style.color = '#28a745';
+                
+                setTimeout(() => {
+                    generateBtn.innerHTML = originalText;
+                    generateBtn.style.color = '';
+                    generateBtn.disabled = false;
+                }, 2000);
+            } else {
+                alert(`Error generating files: ${result.error || 'Unknown error'}`);
+                generateBtn.innerHTML = originalText;
+                generateBtn.disabled = false;
+            }
+        } catch (error) {
+            alert(`Error generating files: ${error.message}`);
+            generateBtn.innerHTML = originalText;
+            generateBtn.disabled = false;
+        }
+    }
+
+    async previewPlumedFiles() {
+        // Use the same preview functionality as section 6, but include plumed.dat
+        try {
+            const resp = await fetch('/api/get-generated-files');
+            const data = await resp.json();
+            if (!data.success) {
+                alert('❌ Error: ' + (data.error || 'Unable to load files'));
+                return;
+            }
+            
+            // Fetch plumed.dat separately if it exists
+            let plumedContent = null;
+            try {
+                const plumedResp = await fetch('/output/plumed.dat');
+                if (plumedResp.ok) {
+                    plumedContent = await plumedResp.text();
+                }
+            } catch (e) {
+                // plumed.dat doesn't exist or can't be read, that's okay
+            }
+            
+            // Find or create preview section
+            let previewSection = document.getElementById('plumed-files-preview');
+            if (!previewSection) {
+                // Create preview section after the buttons
+                const generateSection = document.getElementById('generate-simulation-files-section');
+                previewSection = document.createElement('div');
+                previewSection.id = 'plumed-files-preview';
+                previewSection.className = 'files-preview';
+                previewSection.style.display = 'none';
+                previewSection.style.marginTop = '20px';
+                previewSection.innerHTML = `
+                    <h3><i class="fas fa-files"></i> Generated Files</h3>
+                    <div class="files-list" id="plumed-files-list"></div>
+                `;
+                generateSection.appendChild(previewSection);
+            }
+            
+            const filesList = document.getElementById('plumed-files-list');
+            if (!filesList) return;
+            filesList.innerHTML = '';
+            
+            // Store file contents for modal display
+            this.plumedFileContents = data.files;
+            
+            // Add plumed.dat to the files if it exists
+            if (plumedContent !== null) {
+                this.plumedFileContents['plumed.dat'] = plumedContent;
+            }
+            
+            Object.entries(this.plumedFileContents).forEach(([name, content]) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.style.cssText = 'padding: 10px; margin: 5px 0; border: 1px solid #ddd; border-radius: 5px; cursor: pointer; background: #f9f9f9;';
+                fileItem.innerHTML = `<strong>${name}</strong>`;
+                fileItem.onclick = () => this.showPlumedFileContent(name, content);
+                filesList.appendChild(fileItem);
+            });
+            
+            // Toggle preview section
+            if (previewSection.style.display === 'none') {
+                previewSection.style.display = 'block';
+            } else {
+                previewSection.style.display = 'none';
+            }
+        } catch (e) {
+            console.error('Preview error:', e);
+            alert('❌ Failed to preview files: ' + e.message);
+        }
+    }
+
+    showPlumedFileContent(filename, content) {
+        // Use the same modal functionality as section 6
+        // Create modal if it doesn't exist
+        let modal = document.getElementById('plumed-file-content-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'plumed-file-content-modal';
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+                background: rgba(0,0,0,0.5); z-index: 1000; display: none;
+            `;
+            modal.innerHTML = `
+                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                           background: white; border-radius: 10px; padding: 20px; max-width: 80%; max-height: 80%;
+                           overflow: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <h3 id="plumed-modal-filename" style="margin: 0; color: #333;"></h3>
+                        <button id="plumed-close-modal" style="background: #dc3545; color: white; border: none; 
+                                border-radius: 5px; padding: 8px 15px; cursor: pointer;">Close</button>
+                    </div>
+                    <pre id="plumed-modal-content" style="background: #f8f9fa; padding: 15px; border-radius: 5px; 
+                         overflow: auto; max-height: 60vh; white-space: pre-wrap; font-family: monospace;"></pre>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            // Close modal handlers
+            document.getElementById('plumed-close-modal').onclick = () => modal.style.display = 'none';
+            modal.onclick = (e) => {
+                if (e.target === modal) modal.style.display = 'none';
+            };
+        }
+        
+        // Populate and show modal
+        document.getElementById('plumed-modal-filename').textContent = filename;
+        document.getElementById('plumed-modal-content').textContent = content;
+        modal.style.display = 'block';
+    }
+
+    downloadPlumedFiles() {
+        // Download output folder as ZIP
+        window.open('/api/download-output-zip', '_blank');
     }
 }
 
