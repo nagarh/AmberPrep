@@ -27,7 +27,7 @@ class MDSimulationPipeline {
         this.completedIsSpinning = false;
         this.originalIsSpinning = false;
         this.currentTabIndex = 0;
-        this.tabOrder = ['protein-loading', 'fill-missing', 'structure-prep', 'simulation-params', 'simulation-steps', 'file-generation'];
+        this.tabOrder = ['protein-loading', 'fill-missing', 'structure-prep', 'simulation-params', 'simulation-steps', 'file-generation', 'plumed'];
         // Consistent chain color palette - same colors for same chain IDs throughout
         this.chainColorPalette = [
             '#1f77b4', // blue
@@ -155,6 +155,7 @@ class MDSimulationPipeline {
         document.getElementById('generate-files').addEventListener('click', () => this.generateAllFiles());
         document.getElementById('preview-files').addEventListener('click', () => this.previewFiles());
         document.getElementById('preview-solvated').addEventListener('click', () => this.previewSolvatedProtein());
+        document.getElementById('download-solvated').addEventListener('click', () => this.downloadSolvatedProtein());
         document.getElementById('download-zip').addEventListener('click', () => this.downloadZip());
         
 
@@ -1463,7 +1464,47 @@ echo "Analysis completed! Results saved in analysis/ directory"
         }
     }
 
-    
+    async downloadSolvatedProtein() {
+        try {
+            // Show loading state
+            const button = document.getElementById('download-solvated');
+            const originalText = button.innerHTML;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
+            button.disabled = true;
+
+            // Check if file exists by trying to fetch it
+            const response = await fetch('/output/protein_solvated.pdb', { method: 'HEAD' });
+            
+            if (!response.ok) {
+                throw new Error('Solvated protein file not found. Please generate files first.');
+            }
+
+            // Create download link
+            const downloadUrl = '/output/protein_solvated.pdb';
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = 'protein_solvated.pdb';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            // Show success feedback
+            button.innerHTML = '<i class="fas fa-check"></i> Downloaded!';
+            setTimeout(() => {
+                button.innerHTML = originalText;
+                button.disabled = false;
+            }, 2000);
+
+        } catch (error) {
+            console.error('Error downloading solvated protein:', error);
+            alert('❌ Error: ' + error.message);
+            
+            // Restore button state
+            const button = document.getElementById('download-solvated');
+            button.innerHTML = '<i class="fas fa-download"></i> Download Solvated Protein';
+            button.disabled = false;
+        }
+    }
 
     displaySimulationSummary() {
         const summaryContent = document.getElementById('summary-content');

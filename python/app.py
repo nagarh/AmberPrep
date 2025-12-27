@@ -15,6 +15,7 @@ import requests
 import subprocess
 from Bio.PDB import PDBParser, PDBList
 import logging
+import html
 from structure_preparation import prepare_structure, parse_structure_info
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -671,6 +672,186 @@ def get_viewer_pdb():
     except Exception as e:
         logger.error(f"Error generating viewer PDB: {str(e)}")
         return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/view-pdb')
+def view_pdb_html():
+    """Serve PDB file as HTML page for instant viewing"""
+    try:
+        viewer_out = OUTPUT_DIR / 'viewer_protein_with_ligand.pdb'
+        solvated_path = OUTPUT_DIR / 'protein_solvated.pdb'
+        lig_path = OUTPUT_DIR / '4_ligands_corrected.pdb'
+        
+        # If viewer file doesn't exist, generate it first
+        if not viewer_out.exists():
+            if not solvated_path.exists():
+                return f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Error - PDB Not Found</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; padding: 40px; text-align: center; }}
+                        .error {{ color: #dc3545; font-size: 18px; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="error">
+                        <h1>PDB File Not Found</h1>
+                        <p>Please complete the structure preparation steps first.</p>
+                    </div>
+                </body>
+                </html>
+                """, 404
+            
+            # Generate the file directly (same logic as get_viewer_pdb but without JSON response)
+            try:
+                # Build ligand index from corrected ligand PDB if present
+                ligand_keys = set()
+                ligand_resnames = set()
+                if lig_path.exists():
+                    with open(lig_path, 'r') as lf:
+                        for line in lf:
+                            if line.startswith(('ATOM', 'HETATM')):
+                                resn = line[17:20].strip()
+                                chain = line[21:22].strip()
+                                resi = line[22:26].strip()
+                                ligand_resnames.add(resn)
+                                if chain and resi:
+                                    ligand_keys.add((resn, chain, resi))
+
+                # Rewrite solvated file marking matching ligand residues and ions (NA/CL) as HETATM
+                out_lines = []
+                with open(solvated_path, 'r') as sf:
+                    for line in sf:
+                        if line.startswith(('ATOM', 'HETATM')):
+                            resn = line[17:20].strip()
+                            chain = line[21:22].strip()
+                            resi = line[22:26].strip()
+                            is_match = False
+                            is_ion = resn in { 'NA', 'CL' }
+                            if (resn, chain, resi) in ligand_keys:
+                                is_match = True
+                            elif resn in ligand_resnames:
+                                # Fallback by residue name only
+                                is_match = True
+                            if is_match or is_ion:
+                                # Force to HETATM
+                                out_lines.append('HETATM' + line[6:])
+                            else:
+                                out_lines.append(line)
+                        else:
+                            out_lines.append(line)
+
+                # Save combined viewer file
+                with open(viewer_out, 'w') as vf:
+                    vf.writelines(out_lines)
+            except Exception as e:
+                logger.error(f"Error generating viewer PDB: {str(e)}")
+                return f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Error</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; padding: 40px; text-align: center; }}
+                        .error {{ color: #dc3545; font-size: 18px; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="error">
+                        <h1>Error Generating PDB</h1>
+                        <p>Could not generate viewer PDB file: {html.escape(str(e))}</p>
+                    </div>
+                </body>
+                </html>
+                """, 500
+        
+        # Read PDB content
+        with open(viewer_out, 'r') as f:
+            pdb_content = f.read()
+        
+        # Escape HTML special characters
+        escaped_content = html.escape(pdb_content)
+        
+        # Create HTML page
+        html_page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viewer PDB File</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+            background: #f8f9fa;
+            padding: 20px;
+        }}
+        .header {{
+            background: white;
+            padding: 15px 20px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        .header h1 {{
+            font-size: 18px;
+            color: #333;
+        }}
+        .pdb-content {{
+            background: white;
+            padding: 20px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow-x: auto;
+            white-space: pre;
+            word-wrap: normal;
+        }}
+        .info {{
+            color: #666;
+            font-size: 11px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📄 Viewer PDB File</h1>
+        <div class="info">File: viewer_protein_with_ligand.pdb</div>
+    </div>
+    <div class="pdb-content">{escaped_content}</div>
+</body>
+</html>"""
+        
+        return html_page, 200, {'Content-Type': 'text/html; charset=utf-8'}
+    except Exception as e:
+        logger.error(f"Error serving PDB as HTML: {str(e)}")
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Error</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; padding: 40px; text-align: center; }}
+                .error {{ color: #dc3545; font-size: 18px; }}
+            </style>
+        </head>
+        <body>
+            <div class="error">
+                <h1>Error Loading PDB</h1>
+                <p>{html.escape(str(e))}</p>
+            </div>
+        </body>
+        </html>
+        """, 500
 
 @app.route('/api/get-corrected-ligands', methods=['GET'])
 def get_corrected_ligands():
@@ -1539,6 +1720,37 @@ def save_pdb_file():
         })
     except Exception as e:
         logger.error(f"Error saving PDB file: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/save-plumed-file', methods=['POST'])
+def save_plumed_file():
+    """Save PLUMED file to output directory"""
+    try:
+        data = request.get_json()
+        plumed_content = data.get('plumed_content', '')
+        filename = data.get('filename', 'plumed.dat')
+        
+        if not plumed_content:
+            return jsonify({'success': False, 'error': 'No PLUMED content provided'}), 400
+        
+        # Ensure filename has .dat extension if not provided
+        if not filename.endswith('.dat'):
+            filename = filename if '.' in filename else f"{filename}.dat"
+        
+        # Save to output directory
+        output_file = OUTPUT_DIR / filename
+        with open(output_file, 'w') as f:
+            f.write(plumed_content)
+        
+        logger.info(f"Saved PLUMED file to {output_file}")
+        return jsonify({
+            'success': True,
+            'message': f'PLUMED file saved successfully to output/{filename}',
+            'file_path': str(output_file),
+            'filename': filename
+        })
+    except Exception as e:
+        logger.error(f"Error saving PLUMED file: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/download-output-zip', methods=['GET'])

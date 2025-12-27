@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MD Simulation Pipeline</title>
     <link rel="stylesheet" href="../css/styles.css">
+    <link rel="stylesheet" href="../css/plumed.css">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <!-- NGL 3D Molecular Viewer -->
     <script src="https://unpkg.com/ngl@2.0.0-dev.35/dist/ngl.js"></script>
@@ -38,6 +39,9 @@
             </button>
             <button class="tab-button" data-tab="file-generation">
                 <i class="fas fa-file-download"></i> Generate Files
+            </button>
+            <button class="tab-button" data-tab="plumed">
+                <i class="fas fa-chart-line"></i> PLUMED
             </button>
         </nav>
 
@@ -719,6 +723,9 @@
                         <button class="btn btn-info" id="preview-solvated">
                             <i class="fas fa-tint"></i> Preview Solvated Protein
                         </button>
+                        <button class="btn btn-success" id="download-solvated">
+                            <i class="fas fa-download"></i> Download Solvated Protein
+                        </button>
                     </div>
 
                     <div class="files-preview" id="files-preview" style="display: none;">
@@ -746,6 +753,194 @@
                     </div>
                 </div>
             </div>
+            
+            <!-- PLUMED Section -->
+            <div id="plumed" class="tab-content">
+                <!-- PLUMED Collective Variables Section -->
+                <div class="card plumed-section-card">
+                    <h2>
+                        <i class="fas fa-chart-line"></i> PLUMED Collective Variables
+                    </h2>
+                    <p class="section-description">
+                        Configure Collective Variables (CVs) for biased MD simulations. Select a CV from the sidebar to view documentation and examples.
+                    </p>
+                    
+                    <div class="plumed-container" id="plumed-container">
+                        <!-- Left Sidebar: CV List -->
+                        <div class="plumed-sidebar">
+                            <div class="sidebar-header">
+                                <h3><i class="fas fa-list"></i> Collective Variables</h3>
+                                <div class="search-box">
+                                    <input type="text" id="cv-search" placeholder="Search CVs..." class="search-input">
+                                    <i class="fas fa-search search-icon"></i>
+                                </div>
+                            </div>
+                            <div class="cv-list" id="cv-list">
+                                <!-- CV items will be populated by JavaScript -->
+                            </div>
+                        </div>
+                        
+                        <!-- Right Panel: Documentation and Editor -->
+                        <div class="plumed-content">
+                            <div class="content-header" id="content-header" style="display: none;">
+                                <h3 id="cv-title"></h3>
+                            </div>
+                            
+                            <div class="content-body" id="content-body">
+                                <div class="welcome-message" id="welcome-message">
+                                    <i class="fas fa-hand-pointer fa-3x"></i>
+                                    <h3>Select a Collective Variable</h3>
+                                    <p>Choose a CV from the left sidebar to view its documentation and configure it for your simulation.</p>
+                                </div>
+                                
+                                <!-- Documentation Section -->
+                                <div class="cv-documentation" id="cv-documentation" style="display: none;">
+                                    <div class="doc-section" id="cv-module-section" style="display: none;">
+                                        <h4><i class="fas fa-puzzle-piece"></i> Module</h4>
+                                        <div class="doc-content" id="cv-module"></div>
+                                    </div>
+                                    
+                                    <div class="doc-section">
+                                        <h4><i class="fas fa-info-circle"></i> Description</h4>
+                                        <div class="doc-content" id="cv-description"></div>
+                                    </div>
+                                    
+                                    <div class="doc-section">
+                                        <h4><i class="fas fa-code"></i> Syntax</h4>
+                                        <div class="doc-content">
+                                            <pre class="syntax-box" id="cv-syntax"></pre>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="doc-section" id="cv-glossary-section" style="display: none;">
+                                        <h4><i class="fas fa-book"></i> Glossary of keywords and components</h4>
+                                        <div class="doc-content" id="cv-glossary"></div>
+                                    </div>
+                                    
+                                    <div class="doc-section" id="cv-options-section" style="display: none;">
+                                        <h4><i class="fas fa-list-ul"></i> Options</h4>
+                                        <div class="doc-content" id="cv-options"></div>
+                                    </div>
+                                    
+                                    <div class="doc-section" id="cv-components-section" style="display: none;">
+                                        <h4><i class="fas fa-cogs"></i> Components</h4>
+                                        <div class="doc-content" id="cv-components"></div>
+                                    </div>
+                                    
+                                    <div class="doc-section">
+                                        <h4><i class="fas fa-book"></i> Examples</h4>
+                                        <div class="doc-content">
+                                            <pre class="example-box" id="cv-example"></pre>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="doc-section" id="cv-notes-section" style="display: none;">
+                                        <h4><i class="fas fa-sticky-note"></i> Notes</h4>
+                                        <div class="doc-content" id="cv-notes"></div>
+                                    </div>
+                                    
+                                    <div class="doc-section" id="cv-related-section" style="display: none;">
+                                        <h4><i class="fas fa-link"></i> Related Collective Variables</h4>
+                                        <div class="doc-content" id="cv-related"></div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Editable Editor Section -->
+                                <div class="cv-editor-section" id="cv-editor-section" style="display: none;">
+                                    <div class="editor-header">
+                                        <h4><i class="fas fa-edit"></i> Your Configuration</h4>
+                                        <div class="editor-actions">
+                                            <button class="btn btn-sm btn-info" id="copy-config">
+                                                <i class="fas fa-copy"></i> Copy
+                                            </button>
+                                            <button class="btn btn-sm btn-primary" id="view-pdb">
+                                                <i class="fas fa-eye"></i> View PDB
+                                            </button>
+                                            <button class="btn btn-sm btn-secondary" id="reset-cv">
+                                                <i class="fas fa-redo"></i> Reset to Example
+                                            </button>
+                                            <button class="btn btn-sm btn-success" id="save-config">
+                                                <i class="fas fa-save"></i> Save
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <textarea id="cv-editor" class="cv-editor" placeholder="Enter your PLUMED configuration here..."></textarea>
+                                    <div class="editor-footer">
+                                        <span class="char-count"><span id="char-count">0</span> characters</span>
+                                        <span class="line-count"><span id="line-count">0</span> lines</span>
+                                    </div>
+                                </div>
+                                
+                                <!-- Saved Configurations -->
+                                <div class="saved-configs" id="saved-configs" style="display: none;">
+                                    <h4><i class="fas fa-bookmark"></i> Saved Configurations</h4>
+                                    <div class="configs-list" id="configs-list">
+                                        <!-- Saved configs will be shown here -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Custom PLUMED File Section -->
+                <div class="card plumed-section-card" id="custom-plumed-card">
+                    <h2 class="plumed-toggle-header" id="custom-plumed-toggle-header">
+                        <i class="fas fa-file-code"></i> Write Custom PLUMED File
+                        <i class="fas fa-chevron-down toggle-icon" id="custom-plumed-toggle-icon"></i>
+                    </h2>
+                    <p class="section-description">
+                        Write your custom PLUMED configuration from scratch. This editor allows you to create a complete PLUMED input file.
+                    </p>
+                    
+                    <div class="custom-plumed-section" id="custom-plumed-section">
+                        <div class="custom-editor-header">
+                            <h4><i class="fas fa-edit"></i> Custom PLUMED Configuration</h4>
+                            <div class="editor-actions">
+                                <button class="btn btn-sm btn-info" id="copy-custom-plumed">
+                                    <i class="fas fa-copy"></i> Copy
+                                </button>
+                                <button class="btn btn-sm btn-primary" id="view-pdb-custom">
+                                    <i class="fas fa-eye"></i> View PDB
+                                </button>
+                                <button class="btn btn-sm btn-success" id="download-custom-plumed">
+                                    <i class="fas fa-save"></i> Save
+                                </button>
+                                <button class="btn btn-sm btn-secondary" id="clear-custom-plumed">
+                                    <i class="fas fa-trash"></i> Clear
+                                </button>
+                            </div>
+                        </div>
+                        <textarea id="custom-plumed-editor" class="custom-plumed-editor" placeholder="Write your PLUMED configuration here...&#10;&#10;Example:&#10;# PLUMED input file&#10;d1: DISTANCE ATOMS=1,2&#10;PRINT ARG=d1 FILE=colvar.dat"></textarea>
+                        <div class="editor-footer">
+                            <span class="char-count"><span id="custom-char-count">0</span> characters</span>
+                            <span class="line-count"><span id="custom-line-count">0</span> lines</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Generate Simulation Files Section -->
+                <div class="card plumed-section-card" id="generate-simulation-files-card">
+                    <h2 class="plumed-toggle-header" id="generate-simulation-files-toggle-header">
+                        <i class="fas fa-cogs"></i> Generate Simulation Files
+                        <i class="fas fa-chevron-down toggle-icon" id="generate-simulation-files-toggle-icon"></i>
+                    </h2>
+                    <p class="section-description">
+                        Generate and download simulation files for your PLUMED setup.
+                    </p>
+                    
+                    <div class="generate-simulation-files-section" id="generate-simulation-files-section">
+                        <div class="generation-controls" style="display: flex; gap: 10px; padding: 20px;">
+                            <button class="btn btn-primary" id="plumed-generate-files">
+                                <i class="fas fa-magic"></i> Generate Files
+                            </button>
+                            <button class="btn btn-success" id="plumed-download-files">
+                                <i class="fas fa-download"></i> Download Files
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </main>
         
         <!-- Step Navigation Controls -->
@@ -754,7 +949,7 @@
                 <i class="fas fa-chevron-left"></i> Previous
             </button>
             <div class="step-indicator">
-                <span id="current-step">1</span> of <span id="total-steps">6</span>
+                <span id="current-step">1</span> of <span id="total-steps">7</span>
             </div>
             <button class="nav-btn next-btn" id="next-tab">
                 Next <i class="fas fa-chevron-right"></i>
@@ -767,6 +962,29 @@
         </footer>
     </div>
 
+        <!-- PDB Viewer Modal -->
+        <div class="modal" id="pdb-viewer-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10000; overflow: auto;">
+            <div class="modal-content" style="max-width: 90%; max-height: 90vh; margin: 5vh auto; background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #ddd; background: #f8f9fa; border-radius: 8px 8px 0 0;">
+                    <h3 style="margin: 0;"><i class="fas fa-file-code"></i> Viewer PDB File</h3>
+                    <button class="btn btn-sm btn-secondary" id="close-pdb-modal" style="margin: 0;">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+                <div class="modal-body" style="padding: 15px; overflow: auto; max-height: calc(90vh - 100px);">
+                    <div id="pdb-content-loading" style="text-align: center; padding: 20px;">
+                        <i class="fas fa-spinner fa-spin"></i> Loading PDB file...
+                    </div>
+                    <div id="pdb-content-error" style="display: none; color: #dc3545; padding: 20px; text-align: center;">
+                        <i class="fas fa-exclamation-triangle"></i> <span id="pdb-error-message"></span>
+                    </div>
+                    <pre id="pdb-content" style="display: none; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.4; background: #f8f9fa; padding: 15px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;"></pre>
+                </div>
+            </div>
+        </div>
+
     <script src="../js/script.js"></script>
+    <script src="../js/plumed_cv_docs.js"></script>
+    <script src="../js/plumed.js"></script>
 </body>
 </html>
