@@ -407,11 +407,12 @@ UPPER_WALLS ARG=d AT=10.0 KAPPA=100.0`,
             {
                 name: 'ABMD',
                 category: 'Bias',
-                description: 'Adds a ratchet-and-pawl like restraint on one or more variables. This is useful for driving the system along a reaction coordinate.',
-                syntax: 'ABMD ARG=<cv> TO=<value> KAPPA=<kappa> [STRIDE=<stride>]',
-                example: `# Adaptive Biasing MD
-d: DISTANCE ATOMS=1,2
-ABMD ARG=d TO=10.0 KAPPA=10.0`,
+                description: 'Adds a ratchet-and-pawl like restraint on one or more variables. Evolves a system towards a target value in CV space using an harmonic potential moving with the thermal fluctuations of the CV.',
+                syntax: 'ABMD ARG=<cv1>,<cv2>,... TO=<value1>,<value2>,... KAPPA=<kappa1>,<kappa2>,...',
+                example: `# ABMD with multiple CVs
+d1: DISTANCE ATOMS=3,5
+d2: DISTANCE ATOMS=2,4
+abmd: ABMD ARG=d1,d2 TO=1.0,1.5 KAPPA=5.0,5.0`,
                 components: []
             },
             {

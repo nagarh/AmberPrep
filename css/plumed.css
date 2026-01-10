@@ -1,5 +1,71 @@
 /* PLUMED Section Styles */
 
+/* PLUMED Citation Note */
+.plumed-citation-note {
+    background: #e3f2fd;
+    border: 2px solid #2196f3;
+    border-left: 5px solid #2196f3;
+    border-radius: 8px;
+    padding: 1rem 1.5rem;
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    box-shadow: 0 2px 4px rgba(33, 150, 243, 0.1);
+}
+
+.plumed-citation-note i {
+    color: #2196f3;
+    font-size: 1.5rem;
+    margin-top: 0.2rem;
+    flex-shrink: 0;
+}
+
+.citation-content {
+    flex: 1;
+    color: #1565c0;
+    line-height: 1.6;
+}
+
+.citation-content p {
+    margin: 0.5rem 0;
+    font-size: 0.95rem;
+}
+
+.citation-content p:first-child {
+    margin-top: 0;
+}
+
+.citation-content p:last-child {
+    margin-bottom: 0;
+}
+
+.citation-content strong {
+    color: #0d47a1;
+    font-weight: 600;
+}
+
+.citation-content a {
+    color: #1976d2;
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.citation-content a:hover {
+    color: #0d47a1;
+    text-decoration: underline;
+}
+
+.citation-content a i {
+    font-size: 0.85rem;
+    color: inherit;
+    margin: 0;
+}
+
 .plumed-container {
     display: flex;
     gap: 2rem;

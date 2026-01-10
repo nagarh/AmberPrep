@@ -17,7 +17,7 @@ d = sqrt((x1-x2)² + (y1-y2)² + (z1-z2)²)
 where (x1,y1,z1) and (x2,y2,z2) are the positions of the two atoms.
 
 When periodic boundary conditions are used, the minimum image convention is applied. This means that the distance is calculated as the minimum distance between the two atoms considering all periodic images.`,
-        syntax: 'DISTANCE ATOMS=<atom1>,<atom2> [COMPONENTS] [NOPBC]',
+        syntax: 'DISTANCE ATOMS=<atom1>,<atom2> [COMPONENTS] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -32,7 +32,14 @@ When periodic boundary conditions are used, the minimum image convention is appl
             {
                 keyword: 'NOPBC',
                 required: false,
-                description: 'Ignore periodic boundary conditions when calculating distances. By default, PLUMED uses the minimum image convention to calculate distances in periodic systems.'
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [
@@ -111,7 +118,7 @@ The switching function can be of different types:
 - GAUSSIAN: s(r) = exp(-(r-R₀)² / (2σ²))
 
 The default switching function is RATIONAL with n=6 and m=12.`,
-        syntax: 'COORDINATION GROUPA=<group1> GROUPB=<group2> R_0=<value> D_0=<value> [NN=<value>] [MM=<value>] [SWITCH=<type>]',
+        syntax: 'COORDINATION GROUPA=<group1> GROUPB=<group2> R_0=<value> D_0=<value> [NN=<value>] [MM=<value>] [SWITCH=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
@@ -147,6 +154,18 @@ The default switching function is RATIONAL with n=6 and m=12.`,
                 keyword: 'SWITCH',
                 required: false,
                 description: 'The type of switching function to use. Options are RATIONAL, EXPONENTIAL, or GAUSSIAN. Default is RATIONAL.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -281,7 +300,7 @@ This CV is commonly used to:
 - Study side chain dihedral angles (χ angles)
 - Analyze conformational changes
 - Track rotatable bonds`,
-        syntax: 'TORSION ATOMS=<atom1>,<atom2>,<atom3>,<atom4> [NOPBC]',
+        syntax: 'TORSION ATOMS=<atom1>,<atom2>,<atom3>,<atom4> [PERIODIC=<min>,<max>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -289,9 +308,21 @@ This CV is commonly used to:
                 description: 'The four atoms that define the torsional angle. Must be specified as a comma-separated list: atom1,atom2,atom3,atom4. The angle is measured around the bond between atom2 and atom3.'
             },
             {
+                keyword: 'PERIODIC',
+                required: false,
+                description: 'If the output of your function is periodic then you should specify the periodicity of the function. If the output is not periodic you must state this using PERIODIC=NO. For torsions, the default periodicity is from -π to π. Format: PERIODIC=<min>,<max> or PERIODIC=NO.'
+            },
+            {
                 keyword: 'NOPBC',
                 required: false,
-                description: 'Ignore periodic boundary conditions when calculating the torsional angle. By default, PLUMED uses the minimum image convention.'
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -369,7 +400,7 @@ RMSD is commonly used to:
 - Measure convergence to a reference structure
 - Identify structural transitions
 - Analyze protein folding/unfolding`,
-        syntax: 'RMSD REFERENCE=<file> TYPE=<type> [ATOMS=<group>] [NOPBC]',
+        syntax: 'RMSD REFERENCE=<file> TYPE=<type> [ATOMS=<group>] [NOPBC] [SQUARED] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -379,7 +410,7 @@ RMSD is commonly used to:
             {
                 keyword: 'TYPE',
                 required: true,
-                description: 'The type of alignment to perform. Options are: OPTIMAL (full alignment), SIMPLE (translation only), or NOALIGN (no alignment, just calculate RMSD).'
+                description: 'The type of alignment to perform. Options are: OPTIMAL (full alignment using Kabsch algorithm), SIMPLE (translation only), or NOALIGN (no alignment, just calculate RMSD).'
             },
             {
                 keyword: 'ATOMS',
@@ -389,7 +420,20 @@ RMSD is commonly used to:
             {
                 keyword: 'NOPBC',
                 required: false,
-                description: 'Ignore periodic boundary conditions when calculating RMSD. By default, PLUMED uses the minimum image convention.'
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'SQUARED',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the squared RMSD instead of the RMSD. This avoids the square root operation and can be more efficient.'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -636,7 +680,7 @@ The radius of gyration is commonly used to:
 - Measure polymer chain dimensions
 - Study protein compactness
 - Monitor structural changes`,
-        syntax: 'GYRATION ATOMS=<group> [WEIGHTS=<weights>]',
+        syntax: 'GYRATION ATOMS=<group> [WEIGHTS=<weights>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -647,6 +691,18 @@ The radius of gyration is commonly used to:
                 keyword: 'WEIGHTS',
                 required: false,
                 description: 'Optional weights for each atom. If not specified, all atoms are weighted equally. Can be a comma-separated list of weights or a file containing weights.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -814,7 +870,7 @@ The alpha-helix content is the fraction of residues in alpha-helical conformatio
 The beta-sheet content is the fraction of residues in beta-sheet conformations (typically defined by phi and psi angles around -120° and 120°).
 
 The total secondary structure content is the sum of alpha and beta content.`,
-        syntax: 'ALPHABETA ATOMS=<group> [TYPE=<type>]',
+        syntax: 'ALPHABETA ATOMS=<group> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -826,6 +882,18 @@ The total secondary structure content is the sum of alpha and beta content.`,
                 required: false,
                 default: 'DSSP',
                 description: '( default=DSSP ) the method used to assign secondary structure. Options are DSSP, STRIDE, or PROSS.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [
@@ -931,7 +999,7 @@ This CV is useful for:
 - Studying domain motions
 - Characterizing relative domain movements
 - Analyzing flexible multi-domain systems`,
-        syntax: 'MULTI_RMSD REFERENCE=<file> TYPE=<type> GROUPS=<groups> [NOPBC]',
+        syntax: 'MULTI_RMSD REFERENCE=<file> TYPE=<type> GROUPS=<groups> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -951,7 +1019,14 @@ This CV is useful for:
             {
                 keyword: 'NOPBC',
                 required: false,
-                description: 'ignore periodic boundary conditions when calculating RMSD'
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -959,7 +1034,7 @@ This CV is useful for:
             {
                 title: 'Multi-domain RMSD',
                 code: `# Calculate RMSD for three domains
-multi_rmsd: MULTI_RMSD REFERENCE=ref.pdb TYPE=OPTIMAL GROUPS=1-50,51-100,101-150
+                multi_rmsd: MULTI_RMSD REFERENCE=ref.pdb TYPE=OPTIMAL GROUPS=1-50,51-100,101-150
 
 # Print multi-domain RMSD
 PRINT ARG=multi_rmsd FILE=colvar STRIDE=10`
@@ -997,7 +1072,7 @@ The PCA is calculated as:
 3. Project the current structure onto the principal components
 
 The principal components are ordered by their eigenvalues (variance), with PC1 having the largest variance.`,
-        syntax: 'PCA REFERENCE=<file> VECTORS=<file> [NCOMPONENTS=<n>] [ATOMS=<group>]',
+        syntax: 'PCA REFERENCE=<file> VECTORS=<file> [NCOMPONENTS=<n>] [ATOMS=<group>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -1018,6 +1093,18 @@ The principal components are ordered by their eigenvalues (variance), with PC1 h
                 keyword: 'ATOMS',
                 required: false,
                 description: 'the atoms to include in the PCA calculation. If not specified, all atoms are used.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -1064,7 +1151,7 @@ This CV is useful for:
 - Measuring structural similarity using principal components
 - Characterizing large-scale motions
 - Reducing dimensionality in structural analysis`,
-        syntax: 'PCARMSD REFERENCE=<file> VECTORS=<file> [NCOMPONENTS=<n>] [TYPE=<type>]',
+        syntax: 'PCARMSD REFERENCE=<file> VECTORS=<file> [NCOMPONENTS=<n>] [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -1086,6 +1173,18 @@ This CV is useful for:
                 required: false,
                 default: 'OPTIMAL',
                 description: '( default=OPTIMAL ) the type of alignment to perform before projection'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -1133,7 +1232,7 @@ where:
 - 4πr² is the surface area of a sphere of radius r
 
 The RDF is normalized such that g(r) → 1 as r → ∞ for a uniform distribution.`,
-        syntax: 'RDF GROUPA=<group1> GROUPB=<group2> MAX=<max> NBINS=<nbins> [MIN=<min>]',
+        syntax: 'RDF GROUPA=<group1> GROUPB=<group2> MAX=<max> NBINS=<nbins> [MIN=<min>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
@@ -1160,6 +1259,18 @@ The RDF is normalized such that g(r) → 1 as r → ∞ for a uniform distributi
                 required: false,
                 default: '0.0',
                 description: '( default=0.0 ) the minimum distance for RDF calculation (in Angstroms).'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -1214,7 +1325,7 @@ dRMSD is useful when:
 - Structures cannot be easily aligned
 - You want to measure structural similarity without alignment
 - You need a rotationally invariant measure`,
-        syntax: 'DRMSD REFERENCE=<file> LOWER_CUTOFF=<lower> UPPER_CUTOFF=<upper> [ATOMS=<group>] [NOPBC]',
+        syntax: 'DRMSD REFERENCE=<file> LOWER_CUTOFF=<lower> UPPER_CUTOFF=<upper> [ATOMS=<group>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -1240,7 +1351,13 @@ dRMSD is useful when:
                 keyword: 'NOPBC',
                 required: false,
                 default: 'off',
-                description: '( default=off ) ignore periodic boundary conditions when calculating distances'
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -1297,7 +1414,7 @@ This CV is useful for:
 - Analyzing solvation
 - Monitoring hydrogen bond networks
 - Characterizing protein-ligand interactions`,
-        syntax: 'HBOND GROUPA=<group1> GROUPB=<group2> R_0=<value> [DONORS=<donors>] [ACCEPTORS=<acceptors>] [ANGLE_CUTOFF=<angle>]',
+        syntax: 'HBOND GROUPA=<group1> GROUPB=<group2> R_0=<value> [DONORS=<donors>] [ACCEPTORS=<acceptors>] [ANGLE_CUTOFF=<angle>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
@@ -1329,6 +1446,18 @@ This CV is useful for:
                 required: false,
                 default: '120.0',
                 description: '( default=120.0 ) the minimum angle (in degrees) for a hydrogen bond'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -2107,73 +2236,118 @@ UPPER_WALLS ARG=d AT=10.0 KAPPA=100.0`
 
 Adds a ratchet-and-pawl like restraint on one or more variables.
 
-Adaptive Biasing Molecular Dynamics (ABMD) applies a time-dependent bias that drives the system along a reaction coordinate. The bias is updated periodically based on the current position, creating a "ratchet" effect that prevents backward motion.
+This action can be used to evolve a system towards a target value in CV space using an harmonic potential moving with the thermal fluctuations of the CV. The biasing potential in this method is as follows:
 
-The ABMD bias is:
-V(s,t) = (1/2) × κ × (s - s_target(t))²
+V(ρ(t)) = { (K/2)(ρ(t)-ρ_m(t))², if ρ(t) > ρ_m(t)
+          { 0, if ρ(t) ≤ ρ_m(t)
 
-where s_target(t) moves towards the target value TO according to a predefined schedule.
+where
+
+ρ(t) = (CV(t) - TO)²
+
+and
+
+ρ_m(t) = min_{0≤τ≤t} ρ(τ) + η(t)
+
+The method is based on the introduction of a biasing potential which is zero when the system is moving towards the desired arrival point and which damps the fluctuations when the system attempts to move in the opposite direction. As in the case of the ratchet and pawl system, propelled by thermal motion of the solvent molecules, the biasing potential does not exert work on the system. η(t) is an additional white noise acting on the minimum position of the bias.
 
 ABMD is useful for:
-- Driving reactions
+- Driving reactions towards target values
 - Steered molecular dynamics
 - Pulling simulations
-- Forcing transitions`,
-        syntax: 'ABMD ARG=<cv> TO=<value> KAPPA=<kappa> [STRIDE=<stride>] [LABEL=<label>]',
+- Forcing transitions using thermal fluctuations`,
+        syntax: 'ABMD ARG=<cv1>,<cv2>,... TO=<value1>,<value2>,... KAPPA=<kappa1>,<kappa2>,... [MIN=<min1>,<min2>,...] [NOISE=<noise1>,<noise2>,...] [SEED=<seed1>,<seed2>,...] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ARG',
                 required: true,
-                description: 'the collective variable to bias'
+                description: 'the input for this action is the scalar output from one or more other actions. The particular scalars that you will use are referenced using the label of the action. If the label appears on its own then it is assumed that the Action calculates a single scalar value. The value of this scalar is thus used as the input to this new action. You can use multiple instances of this keyword i.e. ARG1, ARG2, ARG3...'
             },
             {
                 keyword: 'TO',
                 required: true,
-                description: 'the target value for the CV. ABMD will drive the CV towards this value.'
+                description: 'The array of target values. ABMD will drive each CV towards its corresponding target value.'
             },
             {
                 keyword: 'KAPPA',
                 required: true,
-                description: 'the force constant for the bias. Larger values give stronger driving forces.'
+                description: 'The array of force constants. Larger values give stronger driving forces. Must have the same number of elements as ARG and TO.'
             },
             {
-                keyword: 'STRIDE',
+                keyword: 'MIN',
                 required: false,
-                default: '1',
-                description: '( default=1 ) the frequency (in MD steps) at which to update the bias target'
+                description: 'Array of starting values for the bias (set ρ_m(t), otherwise it is set using the current value of ARG)'
             },
             {
-                keyword: 'LABEL',
+                keyword: 'NOISE',
                 required: false,
-                description: 'a label for the action'
+                description: 'Array of white noise intensities (add a temperature to the ABMD). This corresponds to η(t) in the formula.'
+            },
+            {
+                keyword: 'SEED',
+                required: false,
+                description: 'Array of seeds for the white noise (add a temperature to the ABMD)'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
-        components: [],
-        examples: [
+        components: [
             {
-                title: 'Basic ABMD',
-                code: `# Adaptive Biasing MD
-d: DISTANCE ATOMS=1,2
-ABMD ARG=d TO=10.0 KAPPA=10.0
-
-# Drives distance towards 10.0 Å
-PRINT ARG=d FILE=COLVAR STRIDE=10`
+                name: 'bias',
+                description: 'the instantaneous value of the bias potential'
             },
             {
-                title: 'ABMD with stride',
-                code: `# ABMD with slower updates
+                name: 'force2',
+                description: 'the instantaneous value of the squared force due to this bias potential'
+            },
+            {
+                name: '_min',
+                description: 'one or multiple instances of this quantity can be referenced elsewhere in the input file. These quantities will be named with the arguments of the bias followed by the character string _min. These quantities tell the user the minimum value assumed by ρ_m(t). For example, if ARG=d1,d2, then abmd.d1_min and abmd.d2_min will be available.'
+            }
+        ],
+        examples: [
+            {
+                title: 'Basic ABMD with single CV',
+                code: `# ABMD on a single distance
+d1: DISTANCE ATOMS=3,5
+abmd: ABMD ARG=d1 TO=1.0 KAPPA=5.0
+
+# Print the bias and minimum
+PRINT ARG=abmd.bias,abmd.d1_min FILE=COLVAR STRIDE=10`
+            },
+            {
+                title: 'ABMD with multiple CVs',
+                code: `# ABMD on two distances
+d1: DISTANCE ATOMS=3,5
+d2: DISTANCE ATOMS=2,4
+abmd: ABMD ARG=d1,d2 TO=1.0,1.5 KAPPA=5.0,5.0
+
+# Print bias and minimums for both CVs
+PRINT ARG=abmd.bias,abmd.d1_min,abmd.d2_min FILE=COLVAR STRIDE=10`
+            },
+            {
+                title: 'ABMD with noise',
+                code: `# ABMD with white noise
 d: DISTANCE ATOMS=1,2
-ABMD ARG=d TO=10.0 KAPPA=10.0 STRIDE=100`
+abmd: ABMD ARG=d TO=10.0 KAPPA=10.0 NOISE=0.1 SEED=12345
+
+# The noise adds temperature to the ABMD minimum position`
             }
         ],
         notes: [
-            'ABMD creates a ratchet effect - it prevents the CV from going backwards.',
-            'The bias target moves towards TO over time.',
-            'Larger KAPPA values give stronger driving forces.',
-            'STRIDE controls how often the target is updated.',
-            'ABMD is useful for pulling/steering simulations.'
+            'ABMD creates a ratchet effect - it prevents the CV from going backwards when ρ(t) > ρ_m(t).',
+            'The bias is zero when the system moves towards the target (ρ(t) ≤ ρ_m(t)).',
+            'TO and KAPPA must be arrays with the same number of elements as ARG.',
+            'The method uses thermal fluctuations to drive the system, so it does not exert work on the system.',
+            'NOISE adds white noise to the minimum position, which can help escape local minima.',
+            'Each CV in ARG will have a corresponding _min quantity (e.g., abmd.d1_min, abmd.d2_min).',
+            'ABMD is useful for pulling/steering simulations where you want to drive towards a target value.'
         ],
-        related: ['MOVINGRESTRAINT', 'RESTRAINT']
+        related: ['MOVINGRESTRAINT', 'RESTRAINT', 'METAD']
     },
     
     'MOVINGRESTRAINT': {
@@ -2697,8 +2871,7 @@ WHAM_HISTOGRAM is useful for:
             {
                 keyword: 'BIAS',
                 required: true,
-                default: '*.bias',
-                description: '( default=*.bias ) the value of the biases to use when performing WHAM'
+                description: 'the value of the biases to use when performing WHAM'
             },
             {
                 keyword: 'TEMP',
@@ -2769,7 +2942,7 @@ ADAPTIVE_PATH is useful for:
 - Adaptive path sampling
 - Transition state identification
 - Reaction pathway discovery`,
-        syntax: 'ADAPTIVE_PATH REFERENCE=<file> LAMBDA=<lambda> [TYPE=<type>]',
+        syntax: 'ADAPTIVE_PATH REFERENCE=<file> LAMBDA=<lambda> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -2786,6 +2959,18 @@ ADAPTIVE_PATH is useful for:
                 required: false,
                 default: 'OPTIMAL',
                 description: '( default=OPTIMAL ) the type of path calculation'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [
@@ -2829,7 +3014,7 @@ ALPHARMSD is useful for:
 - Analyzing helical structure
 - Protein structure analysis
 - Secondary structure characterization`,
-        syntax: 'ALPHARMSD ATOMS=<group> [TYPE=<type>]',
+        syntax: 'ALPHARMSD ATOMS=<group> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -2841,6 +3026,18 @@ ALPHARMSD is useful for:
                 required: false,
                 default: 'OPTIMAL',
                 description: '( default=OPTIMAL ) the type of comparison to perform'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -2875,7 +3072,7 @@ ANTIBETARMSD is useful for:
 - Analyzing beta sheet structure
 - Protein structure analysis
 - Secondary structure characterization`,
-        syntax: 'ANTIBETARMSD ATOMS=<group> [TYPE=<type>]',
+        syntax: 'ANTIBETARMSD ATOMS=<group> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -2887,6 +3084,18 @@ ANTIBETARMSD is useful for:
                 required: false,
                 default: 'OPTIMAL',
                 description: '( default=OPTIMAL ) the type of comparison to perform'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3038,7 +3247,7 @@ CONTACTMAP is useful for:
 - Structural analysis
 - Protein folding studies
 - Conformational analysis`,
-        syntax: 'CONTACTMAP ATOMS=<group> SWITCH=<switching_function>',
+        syntax: 'CONTACTMAP ATOMS=<group> SWITCH=<switching_function> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -3049,6 +3258,18 @@ CONTACTMAP is useful for:
                 keyword: 'SWITCH',
                 required: true,
                 description: 'the switching function to apply to distances (e.g., {RATIONAL R_0=5.0 D_0=1.0})'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3093,7 +3314,7 @@ DHENERGY is useful for:
 - Studying charge-charge interactions
 - Accounting for screening effects
 - Simplified electrostatic energy calculations`,
-        syntax: 'DHENERGY GROUPA=<group1> GROUPB=<group2> [EPSILON=<eps>] [KAPPA=<kappa>] [SCALE=<scale>]',
+        syntax: 'DHENERGY GROUPA=<group1> GROUPB=<group2> [EPSILON=<eps>] [KAPPA=<kappa>] [SCALE=<scale>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
@@ -3122,6 +3343,18 @@ DHENERGY is useful for:
                 required: false,
                 default: '1.0',
                 description: '( default=1.0 ) scaling factor for the energy'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3156,7 +3389,7 @@ DIHCOR is useful for:
 - Measuring structural similarity
 - Analyzing conformational changes
 - Identifying similar conformations`,
-        syntax: 'DIHCOR ATOMS=<group> REFERENCE=<file> [TYPE=<type>]',
+        syntax: 'DIHCOR ATOMS=<group> REFERENCE=<file> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -3173,6 +3406,18 @@ DIHCOR is useful for:
                 required: false,
                 default: 'OPTIMAL',
                 description: '( default=OPTIMAL ) the type of comparison to perform'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3207,7 +3452,7 @@ DIMER is useful for:
 - Calculating binding energies
 - Analyzing dimer stability
 - Modeling molecular complexes`,
-        syntax: 'DIMER ATOMS=<group> [SWITCH=<switch>] [CUTOFF=<cutoff>]',
+        syntax: 'DIMER ATOMS=<group> [SWITCH=<switch>] [CUTOFF=<cutoff>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -3223,6 +3468,18 @@ DIMER is useful for:
                 keyword: 'CUTOFF',
                 required: false,
                 description: 'the cutoff distance for interactions'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3260,7 +3517,7 @@ DIPOLE is useful for:
 - Studying electric field effects
 - Analyzing charge distributions
 - Modeling polar molecules`,
-        syntax: 'DIPOLE ATOMS=<group> [COMPONENTS] [CENTER=<center>]',
+        syntax: 'DIPOLE ATOMS=<group> [COMPONENTS] [CENTER=<center>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -3276,6 +3533,18 @@ DIPOLE is useful for:
                 keyword: 'CENTER',
                 required: false,
                 description: 'the center for calculating the dipole (default is center of mass)'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [
@@ -3383,7 +3652,7 @@ EEFSOLV is useful for:
 - Implicit solvent modeling
 - Free energy calculations
 - Protein folding studies`,
-        syntax: 'EEFSOLV ATOMS=<group> [PARAMETERS=<file>]',
+        syntax: 'EEFSOLV ATOMS=<group> [PARAMETERS=<file>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -3394,6 +3663,18 @@ EEFSOLV is useful for:
                 keyword: 'PARAMETERS',
                 required: false,
                 description: 'the parameter file for EEF1 (uses default if not specified)'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3428,7 +3709,7 @@ ERMSD is useful for:
 - Measuring ensemble similarity
 - Analyzing conformational variability
 - Studying structural diversity`,
-        syntax: 'ERMSD REFERENCE=<file> [TYPE=<type>] [ATOMS=<group>]',
+        syntax: 'ERMSD REFERENCE=<file> [TYPE=<type>] [ATOMS=<group>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -3445,6 +3726,18 @@ ERMSD is useful for:
                 keyword: 'ATOMS',
                 required: false,
                 description: 'specific atoms to use for the calculation (uses all atoms if not specified)'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3578,7 +3871,7 @@ FUNCPATHMSD is useful for:
 - Reaction coordinate definition
 - Transition path analysis
 - Free energy calculations along paths`,
-        syntax: 'FUNCPATHMSD REFERENCE=<file> LAMBDA=<lambda> [TYPE=<type>]',
+        syntax: 'FUNCPATHMSD REFERENCE=<file> LAMBDA=<lambda> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -3595,6 +3888,18 @@ FUNCPATHMSD is useful for:
                 required: false,
                 default: 'OPTIMAL',
                 description: '( default=OPTIMAL ) the type of alignment to perform'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [
@@ -3641,7 +3946,7 @@ FUNCPATHGENERAL is useful for:
 - Custom CV combinations for paths
 - Advanced path sampling
 - Flexible reaction coordinate definitions`,
-        syntax: 'FUNCPATHGENERAL REFERENCE=<file> LAMBDA=<lambda> CVS=<cvs>',
+        syntax: 'FUNCPATHGENERAL REFERENCE=<file> LAMBDA=<lambda> CVS=<cvs> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -3657,6 +3962,18 @@ FUNCPATHGENERAL is useful for:
                 keyword: 'CVS',
                 required: true,
                 description: 'the collective variables to use for the path. Multiple CVs should be specified as comma-separated labels, e.g., CVS=distance,angle'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3693,7 +4010,7 @@ GHBFIX is useful for:
 - Modeling hydrogen-bonding interactions
 - RNA structure refinement
 - Force field development`,
-        syntax: 'GHBFIX GROUPA=<group1> GROUPB=<group2> [SCALE=<scale>] [UNITS=<units>]',
+        syntax: 'GHBFIX GROUPA=<group1> GROUPB=<group2> [SCALE=<scale>] [UNITS=<units>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
@@ -3716,6 +4033,18 @@ GHBFIX is useful for:
                 required: false,
                 default: 'kcal/mol',
                 description: '( default=kcal/mol ) energy units'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3750,7 +4079,7 @@ GPROPERTYMAP is useful for:
 - Custom distance metrics
 - Advanced property comparisons
 - Flexible molecular similarity measures`,
-        syntax: 'GPROPERTYMAP PROPERTY=<property> REFERENCE=<file> [METRIC=<metric>]',
+        syntax: 'GPROPERTYMAP PROPERTY=<property> REFERENCE=<file> [METRIC=<metric>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'PROPERTY',
@@ -3767,6 +4096,18 @@ GPROPERTYMAP is useful for:
                 required: false,
                 default: 'EUCLIDEAN',
                 description: '( default=EUCLIDEAN ) the distance metric to use'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3801,7 +4142,7 @@ PARABETARMSD is useful for:
 - Analyzing beta sheet structure
 - Protein structure analysis
 - Secondary structure characterization`,
-        syntax: 'PARABETARMSD ATOMS=<group> [TYPE=<type>]',
+        syntax: 'PARABETARMSD ATOMS=<group> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -3813,6 +4154,18 @@ PARABETARMSD is useful for:
                 required: false,
                 default: 'OPTIMAL',
                 description: '( default=OPTIMAL ) the type of comparison to perform'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3847,7 +4200,7 @@ PATH is useful for:
 - Custom distance metrics
 - Advanced path sampling
 - Flexible reaction coordinate definitions`,
-        syntax: 'PATH REFERENCE=<file> LAMBDA=<lambda> [METRIC=<metric>]',
+        syntax: 'PATH REFERENCE=<file> LAMBDA=<lambda> [METRIC=<metric>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -3864,6 +4217,18 @@ PATH is useful for:
                 required: false,
                 default: 'EUCLIDEAN',
                 description: '( default=EUCLIDEAN ) the distance metric to use'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -3898,7 +4263,7 @@ PATHMSD is useful for:
 - Reaction coordinate definition
 - Transition path analysis
 - Free energy calculations along paths`,
-        syntax: 'PATHMSD REFERENCE=<file> LAMBDA=<lambda> [TYPE=<type>]',
+        syntax: 'PATHMSD REFERENCE=<file> LAMBDA=<lambda> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -3915,6 +4280,18 @@ PATHMSD is useful for:
                 required: false,
                 default: 'OPTIMAL',
                 description: '( default=OPTIMAL ) the type of alignment to perform'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [
@@ -3958,7 +4335,7 @@ PCAVARS is useful for:
 - Dimensionality reduction
 - Conformational analysis
 - Large-scale motions`,
-        syntax: 'PCAVARS REFERENCE=<file> VECTORS=<file> [NCOMPONENTS=<n>]',
+        syntax: 'PCAVARS REFERENCE=<file> VECTORS=<file> [NCOMPONENTS=<n>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
@@ -3974,6 +4351,18 @@ PCAVARS is useful for:
                 keyword: 'NCOMPONENTS',
                 required: false,
                 description: 'the number of components to use (uses all if not specified)'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4008,7 +4397,7 @@ POSITION is useful for:
 - Using position components in other CVs
 - Spatial analysis
 - Coordinate extraction`,
-        syntax: 'POSITION ATOMS=<atom> [COMPONENTS] [NOPBC]',
+        syntax: 'POSITION ATOMS=<atom> [COMPONENTS] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -4023,7 +4412,14 @@ POSITION is useful for:
             {
                 keyword: 'NOPBC',
                 required: false,
-                description: 'ignore periodic boundary conditions'
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [
@@ -4076,7 +4472,7 @@ PROJECTION_ON_AXIS is useful for:
 - Analyzing directional properties
 - Measuring distances from axes
 - Spatial analysis`,
-        syntax: 'PROJECTION_ON_AXIS ATOMS=<group> AXIS=<axis>',
+        syntax: 'PROJECTION_ON_AXIS ATOMS=<group> AXIS=<axis> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -4087,6 +4483,18 @@ PROJECTION_ON_AXIS is useful for:
                 keyword: 'AXIS',
                 required: true,
                 description: 'the axis vector (three components: x, y, z)'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [
@@ -4130,7 +4538,7 @@ PROPERTYMAP is useful for:
 - Comparing molecular properties
 - Structural similarity measures
 - Property-based analysis`,
-        syntax: 'PROPERTYMAP PROPERTY=<property> REFERENCE=<file>',
+        syntax: 'PROPERTYMAP PROPERTY=<property> REFERENCE=<file> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'PROPERTY',
@@ -4141,6 +4549,18 @@ PROPERTYMAP is useful for:
                 keyword: 'REFERENCE',
                 required: true,
                 description: 'the reference structure file'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4175,12 +4595,24 @@ PUCKERING is useful for:
 - Nucleic acid structure analysis
 - RNA/DNA structure studies
 - Conformational analysis`,
-        syntax: 'PUCKERING ATOMS=<group>',
+        syntax: 'PUCKERING ATOMS=<group> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
                 required: true,
                 description: 'the five atoms that define the sugar ring'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [
@@ -4259,7 +4691,7 @@ ANGLES is useful for:
 - Analyzing angle distributions
 - Computing statistics on angles (min, max, mean)
 - Filtering angles based on values`,
-        syntax: 'ANGLES ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> [MEAN] [MIN] [MAX] [MORE_THAN] [LESS_THAN]',
+        syntax: 'ANGLES ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> [MEAN] [MIN] [MAX] [MORE_THAN] [LESS_THAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -4290,6 +4722,18 @@ ANGLES is useful for:
                 keyword: 'MAX',
                 required: false,
                 description: 'calculate the maximum angle'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4329,7 +4773,7 @@ BOND_DIRECTIONS is useful for:
 - Computing directional properties
 - Studying molecular orientations
 - Vector-based analysis`,
-        syntax: 'BOND_DIRECTIONS GROUPA=<group1> GROUPB=<group2> SWITCH=<switch>',
+        syntax: 'BOND_DIRECTIONS GROUPA=<group1> GROUPB=<group2> SWITCH=<switch> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
@@ -4345,6 +4789,18 @@ BOND_DIRECTIONS is useful for:
                 keyword: 'SWITCH',
                 required: true,
                 description: 'the switching function that defines the cutoff (e.g., {RATIONAL R_0=2.0 D_0=0.2})'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4379,7 +4835,7 @@ BRIDGE is useful for:
 - Analyzing structural connectivity
 - Studying linker regions
 - Characterizing molecular bridges`,
-        syntax: 'BRIDGE GROUPA=<group1> GROUPB=<group2> [SWITCH=<switch>]',
+        syntax: 'BRIDGE GROUPA=<group1> GROUPB=<group2> [SWITCH=<switch>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
@@ -4395,6 +4851,18 @@ BRIDGE is useful for:
                 keyword: 'SWITCH',
                 required: false,
                 description: 'optional switching function for distance cutoff'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4429,7 +4897,7 @@ COORDINATIONNUMBER is useful for:
 - Analyzing coordination distributions
 - Computing statistics on coordination (min, max, mean)
 - Filtering atoms based on coordination`,
-        syntax: 'COORDINATIONNUMBER GROUPA=<group1> GROUPB=<group2> SWITCH=<switch> [MEAN] [MIN] [MAX]',
+        syntax: 'COORDINATIONNUMBER GROUPA=<group1> GROUPB=<group2> SWITCH=<switch> [MEAN] [MIN] [MAX] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
@@ -4460,6 +4928,18 @@ COORDINATIONNUMBER is useful for:
                 keyword: 'MAX',
                 required: false,
                 description: 'calculate the maximum coordination number'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4499,7 +4979,7 @@ DENSITY is useful for:
 - Analyzing density distributions
 - Computing number of atoms in specific volumes
 - Studying spatial density variations`,
-        syntax: 'DENSITY ATOMS=<group> [MEAN] [MIN] [MAX]',
+        syntax: 'DENSITY ATOMS=<group> [MEAN] [MIN] [MAX] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -4520,6 +5000,18 @@ DENSITY is useful for:
                 keyword: 'MAX',
                 required: false,
                 description: 'calculate the maximum density'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4559,7 +5051,7 @@ DISTANCES is useful for:
 - Analyzing distance distributions
 - Computing statistics on distances (min, max, mean)
 - Filtering distances based on values`,
-        syntax: 'DISTANCES ATOMS1=<group1> ATOMS2=<group2> [ATOMS3=<group3>] [MEAN] [MIN] [MAX] [MORE_THAN] [LESS_THAN]',
+        syntax: 'DISTANCES ATOMS1=<group1> ATOMS2=<group2> [ATOMS3=<group3>] [MEAN] [MIN] [MAX] [MORE_THAN] [LESS_THAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -4590,6 +5082,18 @@ DISTANCES is useful for:
                 keyword: 'MAX',
                 required: false,
                 description: 'calculate the maximum distance'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4629,7 +5133,7 @@ ENVIRONMENTSIMILARITY is useful for:
 - Identifying crystal-like regions
 - Analyzing structural similarity
 - Characterizing local order`,
-        syntax: 'ENVIRONMENTSIMILARITY ATOMS=<group> REFERENCE=<file> [MEAN]',
+        syntax: 'ENVIRONMENTSIMILARITY ATOMS=<group> REFERENCE=<file> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -4645,6 +5149,18 @@ ENVIRONMENTSIMILARITY is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean similarity'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4679,7 +5195,7 @@ FCCUBIC is useful for:
 - Analyzing crystal structure
 - Characterizing local order
 - Studying phase transitions`,
-        syntax: 'FCCUBIC ATOMS=<group> [MEAN]',
+        syntax: 'FCCUBIC ATOMS=<group> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -4690,6 +5206,18 @@ FCCUBIC is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean FCC similarity'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4724,7 +5252,7 @@ HBPAMM_SH is useful for:
 - Analyzing hydrogen bonding patterns
 - Computing statistics on hydrogen bonds
 - Studying hydrogen bond distributions`,
-        syntax: 'HBPAMM_SH ATOMS=<group> [MEAN]',
+        syntax: 'HBPAMM_SH ATOMS=<group> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -4735,6 +5263,18 @@ HBPAMM_SH is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean number of hydrogen bonds'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4769,7 +5309,7 @@ INPLANEDISTANCES is useful for:
 - Analyzing planar structures
 - Studying distances perpendicular to an axis
 - 2D spatial analysis`,
-        syntax: 'INPLANEDISTANCES ATOMS1=<group1> ATOMS2=<group2> AXIS=<axis> [MEAN]',
+        syntax: 'INPLANEDISTANCES ATOMS1=<group1> ATOMS2=<group2> AXIS=<axis> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -4790,6 +5330,18 @@ INPLANEDISTANCES is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean in-plane distance'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4825,7 +5377,7 @@ MOLECULES is useful for:
 - Analyzing molecular alignment
 - Computing orientation vectors
 - Studying molecular directions`,
-        syntax: 'MOLECULES ATOMS1=<group1> ATOMS2=<group2> [MEAN]',
+        syntax: 'MOLECULES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -4841,6 +5393,18 @@ MOLECULES is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean orientation vector'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -4875,7 +5439,7 @@ PLANES is useful for:
 - Analyzing planar molecular alignment
 - Computing plane normal vectors
 - Studying planar molecular structures`,
-        syntax: 'PLANES ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> [MEAN]',
+        syntax: 'PLANES ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -4896,6 +5460,18 @@ PLANES is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean plane orientation'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5065,7 +5641,7 @@ SIMPLECUBIC is useful for:
 - Analyzing crystal structure
 - Characterizing local order
 - Studying phase transitions`,
-        syntax: 'SIMPLECUBIC ATOMS=<group> [MEAN]',
+        syntax: 'SIMPLECUBIC ATOMS=<group> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -5076,6 +5652,18 @@ SIMPLECUBIC is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean simple cubic similarity'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5110,7 +5698,7 @@ TETRAHEDRAL is useful for:
 - Analyzing liquid water structure
 - Characterizing tetrahedral coordination
 - Studying phase transitions`,
-        syntax: 'TETRAHEDRAL ATOMS=<group> [MEAN]',
+        syntax: 'TETRAHEDRAL ATOMS=<group> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -5121,6 +5709,18 @@ TETRAHEDRAL is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean tetrahedral order'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5155,7 +5755,7 @@ TORSIONS is useful for:
 - Analyzing torsion distributions
 - Filtering torsions based on values
 - Computing statistics on torsions`,
-        syntax: 'TORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN] [MORE_THAN] [LESS_THAN]',
+        syntax: 'TORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN] [MORE_THAN] [LESS_THAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5181,6 +5781,18 @@ TORSIONS is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean torsion angle'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5215,7 +5827,7 @@ XANGLES is useful for:
 - Computing angle distributions
 - Studying directional properties
 - X-axis alignment analysis`,
-        syntax: 'XANGLES ATOMS1=<group1> ATOMS2=<group2> [MEAN]',
+        syntax: 'XANGLES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5231,6 +5843,18 @@ XANGLES is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean angle with x-axis'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5265,7 +5889,7 @@ XDISTANCES is useful for:
 - Analyzing distances along x-axis
 - Computing statistics on x-distances
 - X-axis distance analysis`,
-        syntax: 'XDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN] [MAX]',
+        syntax: 'XDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN] [MAX] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5291,6 +5915,18 @@ XDISTANCES is useful for:
                 keyword: 'MAX',
                 required: false,
                 description: 'calculate the maximum x-distance'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5326,7 +5962,7 @@ XYDISTANCES is useful for:
 - Analyzing planar distances
 - Studying distances neglecting z-component
 - 2D spatial analysis`,
-        syntax: 'XYDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN]',
+        syntax: 'XYDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5347,6 +5983,18 @@ XYDISTANCES is useful for:
                 keyword: 'MIN',
                 required: false,
                 description: 'calculate the minimum xy-distance'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5381,7 +6029,7 @@ XYTORSIONS is useful for:
 - Computing torsion distributions
 - Studying x-axis rotational properties
 - Torsional angle analysis`,
-        syntax: 'XYTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN]',
+        syntax: 'XYTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5407,6 +6055,18 @@ XYTORSIONS is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean xy-torsion'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5441,7 +6101,7 @@ XZDISTANCES is useful for:
 - Analyzing planar distances
 - Studying distances neglecting y-component
 - 2D spatial analysis`,
-        syntax: 'XZDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN]',
+        syntax: 'XZDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5462,6 +6122,18 @@ XZDISTANCES is useful for:
                 keyword: 'MIN',
                 required: false,
                 description: 'calculate the minimum xz-distance'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5496,7 +6168,7 @@ XZTORSIONS is useful for:
 - Computing torsion distributions
 - Studying x-axis rotational properties
 - Torsional angle analysis`,
-        syntax: 'XZTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN]',
+        syntax: 'XZTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5522,6 +6194,18 @@ XZTORSIONS is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean xz-torsion'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5556,7 +6240,7 @@ YANGLES is useful for:
 - Computing angle distributions
 - Studying directional properties
 - Y-axis alignment analysis`,
-        syntax: 'YANGLES ATOMS1=<group1> ATOMS2=<group2> [MEAN]',
+        syntax: 'YANGLES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5572,6 +6256,18 @@ YANGLES is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean angle with y-axis'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5606,7 +6302,7 @@ YDISTANCES is useful for:
 - Analyzing distances along y-axis
 - Computing statistics on y-distances
 - Y-axis distance analysis`,
-        syntax: 'YDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN] [MAX]',
+        syntax: 'YDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN] [MAX] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5632,6 +6328,18 @@ YDISTANCES is useful for:
                 keyword: 'MAX',
                 required: false,
                 description: 'calculate the maximum y-distance'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5666,7 +6374,7 @@ YXTORSIONS is useful for:
 - Computing torsion distributions
 - Studying y-axis rotational properties
 - Torsional angle analysis`,
-        syntax: 'YXTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN]',
+        syntax: 'YXTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5692,6 +6400,18 @@ YXTORSIONS is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean yx-torsion'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5726,7 +6446,7 @@ YZDISTANCES is useful for:
 - Analyzing planar distances
 - Studying distances neglecting x-component
 - 2D spatial analysis`,
-        syntax: 'YZDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN]',
+        syntax: 'YZDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5747,6 +6467,18 @@ YZDISTANCES is useful for:
                 keyword: 'MIN',
                 required: false,
                 description: 'calculate the minimum yz-distance'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5781,7 +6513,7 @@ YZTORSIONS is useful for:
 - Computing torsion distributions
 - Studying y-axis rotational properties
 - Torsional angle analysis`,
-        syntax: 'YZTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN]',
+        syntax: 'YZTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5807,6 +6539,18 @@ YZTORSIONS is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean yz-torsion'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5841,7 +6585,7 @@ ZANGLES is useful for:
 - Computing angle distributions
 - Studying directional properties
 - Z-axis alignment analysis`,
-        syntax: 'ZANGLES ATOMS1=<group1> ATOMS2=<group2> [MEAN]',
+        syntax: 'ZANGLES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5857,6 +6601,18 @@ ZANGLES is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean angle with z-axis'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5891,7 +6647,7 @@ ZDISTANCES is useful for:
 - Analyzing distances along z-axis
 - Computing statistics on z-distances
 - Z-axis distance analysis`,
-        syntax: 'ZDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN] [MAX]',
+        syntax: 'ZDISTANCES ATOMS1=<group1> ATOMS2=<group2> [MEAN] [MIN] [MAX] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5917,6 +6673,18 @@ ZDISTANCES is useful for:
                 keyword: 'MAX',
                 required: false,
                 description: 'calculate the maximum z-distance'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -5952,7 +6720,7 @@ ZXTORSIONS is useful for:
 - Computing torsion distributions
 - Studying z-axis rotational properties
 - Torsional angle analysis`,
-        syntax: 'ZXTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN]',
+        syntax: 'ZXTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -5978,6 +6746,18 @@ ZXTORSIONS is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean zx-torsion'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -6012,7 +6792,7 @@ ZYTORSIONS is useful for:
 - Computing torsion distributions
 - Studying z-axis rotational properties
 - Torsional angle analysis`,
-        syntax: 'ZYTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN]',
+        syntax: 'ZYTORSIONS ATOMS1=<group1> ATOMS2=<group2> ATOMS3=<group3> ATOMS4=<group4> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS1',
@@ -6038,6 +6818,18 @@ ZYTORSIONS is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean zy-torsion'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -6261,7 +7053,7 @@ AROUND is useful for:
 - Computing properties around specific atoms
 - Local environment analysis
 - Spatial filtering of multicolvars`,
-        syntax: 'AROUND ARG=<multicolvar> ATOMS=<group> R_0=<r0>',
+        syntax: 'AROUND ARG=<multicolvar> ATOMS=<group> R_0=<r0> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ARG',
@@ -6277,6 +7069,18 @@ AROUND is useful for:
                 keyword: 'R_0',
                 required: true,
                 description: 'the cutoff distance for the "around" region'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -6312,7 +7116,7 @@ CAVITY is useful for:
 - Computing properties in cavities
 - Box-defined spatial filtering
 - Cavity analysis`,
-        syntax: 'CAVITY ARG=<multicolvar> ATOMS=<group>',
+        syntax: 'CAVITY ARG=<multicolvar> ATOMS=<group> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ARG',
@@ -6323,6 +7127,18 @@ CAVITY is useful for:
                 keyword: 'ATOMS',
                 required: true,
                 description: 'the four atoms that define the corners of the box (must be exactly 4 atoms)'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -6358,7 +7174,7 @@ INCYLINDER is useful for:
 - Computing properties in cylinders
 - Cylindrical spatial filtering
 - Tube-like region analysis`,
-        syntax: 'INCYLINDER ARG=<multicolvar> ATOMS=<group> DIRECTION=<dir> RADIUS=<r>',
+        syntax: 'INCYLINDER ARG=<multicolvar> ATOMS=<group> DIRECTION=<dir> RADIUS=<r> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ARG',
@@ -6379,6 +7195,18 @@ INCYLINDER is useful for:
                 keyword: 'RADIUS',
                 required: true,
                 description: 'the radius of the cylinder'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -6414,7 +7242,7 @@ INENVELOPE is useful for:
 - Computing properties in high-density areas
 - Density-based spatial filtering
 - Envelope region analysis`,
-        syntax: 'INENVELOPE ARG=<multicolvar> ATOMS=<group>',
+        syntax: 'INENVELOPE ARG=<multicolvar> ATOMS=<group> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ARG',
@@ -6425,6 +7253,18 @@ INENVELOPE is useful for:
                 keyword: 'ATOMS',
                 required: true,
                 description: 'the atoms that define the density envelope'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -6460,7 +7300,7 @@ INSPHERE is useful for:
 - Computing properties in spheres
 - Spherical spatial filtering
 - Local region analysis`,
-        syntax: 'INSPHERE ARG=<multicolvar> ATOMS=<group> RADIUS=<r>',
+        syntax: 'INSPHERE ARG=<multicolvar> ATOMS=<group> RADIUS=<r> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ARG',
@@ -6476,6 +7316,18 @@ INSPHERE is useful for:
                 keyword: 'RADIUS',
                 required: true,
                 description: 'the radius of the sphere'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -6512,7 +7364,7 @@ TETRAHEDRALPORE is useful for:
 - Computing properties in tetrahedral pores
 - Tetrahedral spatial filtering
 - Pore analysis`,
-        syntax: 'TETRAHEDRALPORE ARG=<multicolvar> ATOMS=<group>',
+        syntax: 'TETRAHEDRALPORE ARG=<multicolvar> ATOMS=<group> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ARG',
@@ -6523,6 +7375,18 @@ TETRAHEDRALPORE is useful for:
                 keyword: 'ATOMS',
                 required: true,
                 description: 'the four atoms that define the corners of the tetrahedron (must be exactly 4 atoms)'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -6959,7 +7823,7 @@ PAMM is useful for:
 - Characterizing molecular structures
 - Probabilistic structure analysis
 - Motif identification`,
-        syntax: 'PAMM ATOMS=<group> [MEAN]',
+        syntax: 'PAMM ATOMS=<group> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -6970,6 +7834,18 @@ PAMM is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean PAMM value'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -7005,7 +7881,7 @@ POLYMER_ANGLES is useful for:
 - Computing polymer angle distributions
 - Studying polymer structure
 - Polymer conformation analysis`,
-        syntax: 'POLYMER_ANGLES ATOMS=<group> [MEAN]',
+        syntax: 'POLYMER_ANGLES ATOMS=<group> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -7016,6 +7892,18 @@ POLYMER_ANGLES is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean polymer angle'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -7050,7 +7938,7 @@ SMAC is useful for:
 - Comparing to reference structures
 - Analyzing structural variations
 - Structure comparison`,
-        syntax: 'SMAC ATOMS=<group> [MEAN]',
+        syntax: 'SMAC ATOMS=<group> [MEAN] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
@@ -7061,6 +7949,18 @@ SMAC is useful for:
                 keyword: 'MEAN',
                 required: false,
                 description: 'calculate the mean SMAC value'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -7333,25 +8233,34 @@ uwalls: UWALLS ARG=distances AT=10.0 KAPPA=10.0`
             'The orientation matching ensures that molecules are not just close but also properly aligned.',
             'Useful for studying molecular alignment in systems like liquid crystals or aligned molecular assemblies.'
         ],
-        syntax: 'ALIGNED_MATRIX GROUPA=<group1> GROUPB=<group2> SWITCH=<switch>',
+        syntax: 'ALIGNED_MATRIX GROUPA=<group1> GROUPB=<group2> SWITCH=<switch> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
                 required: true,
-                default: 'none',
                 description: 'First group of atoms/molecules to consider for adjacency.'
             },
             {
                 keyword: 'GROUPB',
                 required: true,
-                default: 'none',
                 description: 'Second group of atoms/molecules to consider for adjacency.'
             },
             {
                 keyword: 'SWITCH',
                 required: true,
-                default: 'none',
                 description: 'Switching function that determines the cutoff and smoothness of the adjacency criterion.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -7378,25 +8287,34 @@ PRINT ARG=am FILE=aligned_matrix.dat`
             'The contact matrix is an N×N matrix where element (i,j) indicates if atoms i and j are in contact.',
             'Useful for analyzing protein-protein contacts, protein-ligand interactions, and structural clustering.'
         ],
-        syntax: 'CONTACT_MATRIX GROUPA=<group1> GROUPB=<group2> SWITCH=<switch>',
+        syntax: 'CONTACT_MATRIX GROUPA=<group1> GROUPB=<group2> SWITCH=<switch> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
                 required: true,
-                default: 'none',
                 description: 'First group of atoms to consider for contact.'
             },
             {
                 keyword: 'GROUPB',
                 required: true,
-                default: 'none',
                 description: 'Second group of atoms to consider for contact.'
             },
             {
                 keyword: 'SWITCH',
                 required: true,
-                default: 'none',
                 description: 'Switching function that determines the contact cutoff distance and smoothness.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -7430,25 +8348,34 @@ PRINT ARG=cl FILE=clusters.dat`
             'Useful for analyzing hydrogen bond networks in proteins, DNA, and other biomolecules.',
             'The hydrogen bond matrix can reveal important structural features and interactions.'
         ],
-        syntax: 'HBOND_MATRIX GROUPA=<group1> GROUPB=<group2> [SWITCH=<switch>]',
+        syntax: 'HBOND_MATRIX GROUPA=<group1> GROUPB=<group2> [SWITCH=<switch>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
                 required: true,
-                default: 'none',
                 description: 'First group of atoms (typically hydrogen bond donors).'
             },
             {
                 keyword: 'GROUPB',
                 required: true,
-                default: 'none',
                 description: 'Second group of atoms (typically hydrogen bond acceptors).'
             },
             {
                 keyword: 'SWITCH',
                 required: false,
-                default: 'default',
                 description: 'Optional switching function for hydrogen bond distance cutoff.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -7475,25 +8402,34 @@ PRINT ARG=hbm FILE=hbond_matrix.dat`
             'Useful for analyzing hydrogen bond networks between specific atom types.',
             'Particularly relevant for studying protein structure and nucleic acid interactions.'
         ],
-        syntax: 'HBPAMM_MATRIX GROUPA=<group1> GROUPB=<group2> [SWITCH=<switch>]',
+        syntax: 'HBPAMM_MATRIX GROUPA=<group1> GROUPB=<group2> [SWITCH=<switch>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
                 required: true,
-                default: 'none',
                 description: 'First group of electronegative atoms.'
             },
             {
                 keyword: 'GROUPB',
                 required: true,
-                default: 'none',
                 description: 'Second group of electronegative atoms.'
             },
             {
                 keyword: 'SWITCH',
                 required: false,
-                default: 'default',
                 description: 'Optional switching function for hydrogen bond cutoff.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -7520,25 +8456,34 @@ PRINT ARG=hpmm FILE=hbamm_matrix.dat`
             'Useful for identifying molecules with specific relative orientations.',
             'Particularly relevant for studying molecular assemblies and liquid crystal systems.'
         ],
-        syntax: 'SMAC_MATRIX GROUPA=<group1> GROUPB=<group2> SWITCH=<switch>',
+        syntax: 'SMAC_MATRIX GROUPA=<group1> GROUPB=<group2> SWITCH=<switch> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
                 required: true,
-                default: 'none',
                 description: 'First group of molecules.'
             },
             {
                 keyword: 'GROUPB',
                 required: true,
-                default: 'none',
                 description: 'Second group of molecules.'
             },
             {
                 keyword: 'SWITCH',
                 required: true,
-                default: 'none',
                 description: 'Switching function for distance cutoff and angular criteria.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -7565,19 +8510,29 @@ PRINT ARG=smacm FILE=smac_matrix.dat`
             'Useful for analyzing molecular topology and connectivity patterns.',
             'Particularly relevant for studying polymer systems and molecular networks.'
         ],
-        syntax: 'TOPOLOGY_MATRIX GROUPA=<group1> GROUPB=<group2>',
+        syntax: 'TOPOLOGY_MATRIX GROUPA=<group1> GROUPB=<group2> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'GROUPA',
                 required: true,
-                default: 'none',
                 description: 'First group of atoms.'
             },
             {
                 keyword: 'GROUPB',
                 required: true,
-                default: 'none',
                 description: 'Second group of atoms.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -8071,13 +9026,11 @@ oc2: OUTPUT_CLUSTER CLUSTERS=cl CLUSTER=2 FILE=cluster2.pdb`
             {
                 keyword: 'ARG',
                 required: true,
-                default: 'none',
                 description: 'Input collective variables that will be used as input to the neural network.'
             },
             {
                 keyword: 'FILE',
                 required: true,
-                default: 'none',
                 description: 'Path to the neural network model file (typically .pb format for TensorFlow).'
             }
         ],
@@ -8112,7 +9065,6 @@ PRINT ARG=ann FILE=ann.dat`
             {
                 keyword: 'ARG',
                 required: true,
-                default: 'none',
                 description: 'The collective variable to apply the dynamic reference restraint to.'
             },
             {
@@ -8158,13 +9110,11 @@ PRINT ARG=drr FILE=drr.dat`
             {
                 keyword: 'ARG',
                 required: true,
-                default: 'none',
                 description: 'The collective variable to apply FISST to.'
             },
             {
                 keyword: 'TEMP',
                 required: true,
-                default: 'none',
                 description: 'Target temperature for the force-based tempering (in Kelvin).'
             },
             {
@@ -8204,19 +9154,16 @@ PRINT ARG=fisst FILE=fisst.dat`
             {
                 keyword: 'ARG',
                 required: true,
-                default: 'none',
                 description: 'The collective variable to apply funnel-metadynamics to.'
             },
             {
                 keyword: 'ATOMS',
                 required: false,
-                default: 'all',
                 description: 'Atoms to include in the funnel restraint.'
             },
             {
                 keyword: 'REFERENCE',
                 required: false,
-                default: 'none',
                 description: 'Reference structure file for defining the funnel geometry.'
             }
         ],
@@ -8250,19 +9197,16 @@ PRINT ARG=funnel FILE=funnel.dat`
             {
                 keyword: 'ARG',
                 required: true,
-                default: 'none',
                 description: 'The collective variable describing the ligand position or tunnel geometry.'
             },
             {
                 keyword: 'ATOMS',
                 required: false,
-                default: 'all',
                 description: 'Atoms to include in the MAZE analysis (typically ligand and tunnel atoms).'
             },
             {
                 keyword: 'REFERENCE',
                 required: false,
-                default: 'none',
                 description: 'Reference structure file for defining the tunnel geometry.'
             }
         ],
@@ -8296,13 +9240,11 @@ PRINT ARG=maze FILE=maze.dat`
             {
                 keyword: 'ARG',
                 required: true,
-                default: 'none',
                 description: 'Collective variables to apply OPES to.'
             },
             {
                 keyword: 'SIGMA',
                 required: true,
-                default: 'none',
                 description: 'Width of the Gaussian kernels for each CV (one value per CV).'
             },
             {
@@ -8345,19 +9287,29 @@ PRINT ARG=opes FILE=opes.dat`
             'The CV value remains the same regardless of how equivalent atoms are labeled.',
             'Particularly relevant for studying clusters, nanoparticles, and symmetric systems.'
         ],
-        syntax: 'PIV ATOMS=<atoms> [SWITCH=<switch>]',
+        syntax: 'PIV ATOMS=<atoms> [SWITCH=<switch>] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
                 required: true,
-                default: 'none',
                 description: 'Atoms to include in the permutation invariant calculation.'
             },
             {
                 keyword: 'SWITCH',
                 required: false,
-                default: 'default',
                 description: 'Switching function for defining the interaction cutoff.'
+            },
+            {
+                keyword: 'NOPBC',
+                required: false,
+                default: 'off',
+                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
         components: [],
@@ -8389,13 +9341,11 @@ PRINT ARG=piv FILE=piv.dat`
             {
                 keyword: 'ARG',
                 required: true,
-                default: 'none',
                 description: 'Input collective variables that will be used as input to the PyTorch model.'
             },
             {
                 keyword: 'FILE',
                 required: true,
-                default: 'none',
                 description: 'Path to the PyTorch model file (typically .pt or .pth format).'
             }
         ],
@@ -8430,13 +9380,11 @@ PRINT ARG=pytorch FILE=pytorch.dat`
             {
                 keyword: 'ARG',
                 required: true,
-                default: 'none',
                 description: 'Collective variables to apply VES to.'
             },
             {
                 keyword: 'SIGMA',
                 required: true,
-                default: 'none',
                 description: 'Width of the basis functions for each CV (one value per CV).'
             },
             {

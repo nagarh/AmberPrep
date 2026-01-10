@@ -231,6 +231,43 @@ body {
     color: #3498db;
 }
 
+/* File Generation Note */
+.file-generation-note {
+    background: #fff3cd;
+    border: 2px solid #ffc107;
+    border-left: 5px solid #ffc107;
+    border-radius: 8px;
+    padding: 1rem 1.5rem;
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    box-shadow: 0 2px 4px rgba(255, 193, 7, 0.1);
+}
+
+.file-generation-note i {
+    color: #856404;
+    font-size: 1.5rem;
+    margin-top: 0.2rem;
+    flex-shrink: 0;
+}
+
+.file-generation-note .note-content {
+    flex: 1;
+    color: #856404;
+    line-height: 1.6;
+}
+
+.file-generation-note .note-content p {
+    margin: 0;
+    font-size: 0.95rem;
+}
+
+.file-generation-note .note-content strong {
+    color: #664d03;
+    font-weight: 600;
+}
+
 /* Protein Loading Styles */
 .input-methods {
     display: grid;
