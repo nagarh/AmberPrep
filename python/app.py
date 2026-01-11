@@ -614,29 +614,37 @@ def get_solvated_protein():
 @app.route('/api/get-viewer-pdb', methods=['GET'])
 def get_viewer_pdb():
     """Return a single PDB for viewer: start from protein_solvated.pdb and mark ligand residues as HETATM.
-    Ligand residues are detected from 4_ligands_corrected.pdb by (resname, chain, resi) tuples; if chains/resi not present, fallback to resname matching.
+    Ligand residues are detected from 4_ligands_corrected*.pdb files by (resname, chain, resi) tuples; if chains/resi not present, fallback to resname matching.
     """
     try:
         solvated_path = OUTPUT_DIR / 'protein_solvated.pdb'
-        lig_path = OUTPUT_DIR / '4_ligands_corrected.pdb'
+        # Find all corrected ligand files (support multiple ligands)
+        # Exclude OpenBabel output files (4_ligands_corrected_obabel_*.pdb)
+        lig_paths = sorted([f for f in OUTPUT_DIR.glob('4_ligands_corrected_*.pdb') if "_obabel_" not in f.name])
+        # Fallback to single file for backward compatibility
+        if not lig_paths:
+            single_lig_path = OUTPUT_DIR / '4_ligands_corrected.pdb'
+            if single_lig_path.exists():
+                lig_paths = [single_lig_path]
         viewer_out = OUTPUT_DIR / 'viewer_protein_with_ligand.pdb'
 
         if not solvated_path.exists():
             return jsonify({'success': False, 'error': 'protein_solvated.pdb not found'}), 400
 
-        # Build ligand index from corrected ligand PDB if present
+        # Build ligand index from all corrected ligand PDB files if present
         ligand_keys = set()
         ligand_resnames = set()
-        if lig_path.exists():
-            with open(lig_path, 'r') as lf:
-                for line in lf:
-                    if line.startswith(('ATOM', 'HETATM')):
-                        resn = line[17:20].strip()
-                        chain = line[21:22].strip()
-                        resi = line[22:26].strip()
-                        ligand_resnames.add(resn)
-                        if chain and resi:
-                            ligand_keys.add((resn, chain, resi))
+        for lig_path in lig_paths:
+            if lig_path.exists():
+                with open(lig_path, 'r') as lf:
+                    for line in lf:
+                        if line.startswith(('ATOM', 'HETATM')):
+                            resn = line[17:20].strip()
+                            chain = line[21:22].strip()
+                            resi = line[22:26].strip()
+                            ligand_resnames.add(resn)
+                            if chain and resi:
+                                ligand_keys.add((resn, chain, resi))
 
         # Rewrite solvated file marking matching ligand residues and ions (NA/CL) as HETATM
         out_lines = []
@@ -679,7 +687,14 @@ def view_pdb_html():
     try:
         viewer_out = OUTPUT_DIR / 'viewer_protein_with_ligand.pdb'
         solvated_path = OUTPUT_DIR / 'protein_solvated.pdb'
-        lig_path = OUTPUT_DIR / '4_ligands_corrected.pdb'
+        # Find all corrected ligand files (support multiple ligands)
+        # Exclude OpenBabel output files (4_ligands_corrected_obabel_*.pdb)
+        lig_paths = sorted([f for f in OUTPUT_DIR.glob('4_ligands_corrected_*.pdb') if "_obabel_" not in f.name])
+        # Fallback to single file for backward compatibility
+        if not lig_paths:
+            single_lig_path = OUTPUT_DIR / '4_ligands_corrected.pdb'
+            if single_lig_path.exists():
+                lig_paths = [single_lig_path]
         
         # If viewer file doesn't exist, generate it first
         if not viewer_out.exists():
@@ -705,19 +720,20 @@ def view_pdb_html():
             
             # Generate the file directly (same logic as get_viewer_pdb but without JSON response)
             try:
-                # Build ligand index from corrected ligand PDB if present
+                # Build ligand index from all corrected ligand PDB files if present
                 ligand_keys = set()
                 ligand_resnames = set()
-                if lig_path.exists():
-                    with open(lig_path, 'r') as lf:
-                        for line in lf:
-                            if line.startswith(('ATOM', 'HETATM')):
-                                resn = line[17:20].strip()
-                                chain = line[21:22].strip()
-                                resi = line[22:26].strip()
-                                ligand_resnames.add(resn)
-                                if chain and resi:
-                                    ligand_keys.add((resn, chain, resi))
+                for lig_path in lig_paths:
+                    if lig_path.exists():
+                        with open(lig_path, 'r') as lf:
+                            for line in lf:
+                                if line.startswith(('ATOM', 'HETATM')):
+                                    resn = line[17:20].strip()
+                                    chain = line[21:22].strip()
+                                    resi = line[22:26].strip()
+                                    ligand_resnames.add(resn)
+                                    if chain and resi:
+                                        ligand_keys.add((resn, chain, resi))
 
                 # Rewrite solvated file marking matching ligand residues and ions (NA/CL) as HETATM
                 out_lines = []
@@ -855,21 +871,41 @@ def view_pdb_html():
 
 @app.route('/api/get-corrected-ligands', methods=['GET'])
 def get_corrected_ligands():
-    """Get the corrected ligand PDB file content if present"""
+    """Get the corrected ligand PDB file content if present (combines all ligands)"""
     try:
-        ligand_file = OUTPUT_DIR / '4_ligands_corrected.pdb'
-        if not ligand_file.exists():
+        # Find all corrected ligand files (support multiple ligands)
+        # Exclude OpenBabel output files (4_ligands_corrected_obabel_*.pdb)
+        ligand_files = sorted([f for f in OUTPUT_DIR.glob('4_ligands_corrected_*.pdb') if "_obabel_" not in f.name])
+        # Fallback to single file for backward compatibility
+        if not ligand_files:
+            single_lig_file = OUTPUT_DIR / '4_ligands_corrected.pdb'
+            if single_lig_file.exists():
+                ligand_files = [single_lig_file]
+        
+        if not ligand_files:
             # Return success with exists flag false so frontend can decide gracefully
             return jsonify({'success': True, 'exists': False, 'content': ''})
-        # Read and normalize records to HETATM for viewer compatibility
+        
+        # Read and normalize records to HETATM for viewer compatibility, combine all ligands
         normalized_lines = []
-        with open(ligand_file, 'r') as f:
-            for line in f:
-                if line.startswith('ATOM'):
-                    # Replace record name to HETATM, preserve fixed-width columns
-                    normalized_lines.append('HETATM' + line[6:])
-                else:
-                    normalized_lines.append(line)
+        for ligand_file in ligand_files:
+            with open(ligand_file, 'r') as f:
+                for line in f:
+                    if line.startswith('ATOM'):
+                        # Replace record name to HETATM, preserve fixed-width columns
+                        normalized_lines.append('HETATM' + line[6:])
+                    elif line.startswith('HETATM'):
+                        normalized_lines.append(line)
+                    elif line.strip() == 'END' and ligand_file != ligand_files[-1]:
+                        # Skip END for intermediate ligands, keep only for last
+                        continue
+                    elif line.strip() and not line.startswith(('CRYST', 'REMARK', 'HEADER')):
+                        normalized_lines.append(line)
+        
+        # Ensure we have an END at the end
+        if normalized_lines and not normalized_lines[-1].strip() == 'END':
+            normalized_lines.append('END\n')
+        
         content = ''.join(normalized_lines)
         return jsonify({'success': True, 'exists': True, 'content': content})
     except Exception as e:
@@ -882,14 +918,24 @@ def get_aligned_ligands():
     try:
         solvated_file = OUTPUT_DIR / 'protein_solvated.pdb'
         tleap_ready = OUTPUT_DIR / 'tleap_ready.pdb'
-        ligand_file = OUTPUT_DIR / '4_ligands_corrected.pdb'
+        # Find all corrected ligand files (support multiple ligands)
+        # Exclude OpenBabel output files (4_ligands_corrected_obabel_*.pdb)
+        ligand_files = sorted([f for f in OUTPUT_DIR.glob('4_ligands_corrected_*.pdb') if "_obabel_" not in f.name])
+        # Fallback to single file for backward compatibility
+        if not ligand_files:
+            single_lig_file = OUTPUT_DIR / '4_ligands_corrected.pdb'
+            if single_lig_file.exists():
+                ligand_files = [single_lig_file]
 
         if not solvated_file.exists():
             return jsonify({'success': False, 'error': 'protein_solvated.pdb not found'}), 400
         if not tleap_ready.exists():
             return jsonify({'success': False, 'error': 'tleap_ready.pdb not found'}), 400
-        if not ligand_file.exists():
+        if not ligand_files:
             return jsonify({'success': True, 'exists': False, 'content': ''})
+        
+        # Use first ligand file for PyMOL alignment (or combine them if needed)
+        ligand_file = ligand_files[0]
 
         # Create temp output path
         aligned_lig = OUTPUT_DIR / 'ligand_aligned_for_preview.pdb'
@@ -1168,7 +1214,7 @@ def parse_structure_endpoint():
 
 @app.route('/api/generate-ligand-ff', methods=['POST'])
 def generate_ligand_ff():
-    """Generate force field parameters for ligand"""
+    """Generate force field parameters for multiple ligands"""
     try:
         data = request.get_json()
         force_field = data.get('force_field', 'gaff2')
@@ -1176,91 +1222,126 @@ def generate_ligand_ff():
         # Determine the s parameter based on force field
         s_param = 2 if force_field == 'gaff2' else 1
         
-        # Paths for ligand files in output directory
-        ligand_pdb = OUTPUT_DIR / "4_ligands_corrected.pdb"
-        ligand_mol2 = OUTPUT_DIR / "4_ligands_corrected.mol2"
-        ligand_frcmod = OUTPUT_DIR / "4_ligands_corrected.frcmod"
-        
         print(f"Working directory: {os.getcwd()}")
         print(f"Output directory: {OUTPUT_DIR}")
-        print(f"Ligand PDB path: {ligand_pdb}")
-        print(f"Ligand MOL2 path: {ligand_mol2}")
-        print(f"Ligand FRCMOD path: {ligand_frcmod}")
         
-        if not ligand_pdb.exists():
-            return jsonify({'error': 'Ligand PDB file not found. Please prepare structure with ligands first.'}), 400
+        # Find all individual ligand files (4_ligands_corrected_1.pdb, 4_ligands_corrected_2.pdb, etc.)
+        # Exclude OpenBabel output files (4_ligands_corrected_obabel_*.pdb)
+        ligand_files = sorted([f for f in OUTPUT_DIR.glob("4_ligands_corrected_*.pdb") if "_obabel_" not in f.name])
+        
+        if not ligand_files:
+            # Fallback: check for single ligand file (backward compatibility)
+            single_ligand_pdb = OUTPUT_DIR / "4_ligands_corrected.pdb"
+            if single_ligand_pdb.exists():
+                ligand_files = [single_ligand_pdb]
+            else:
+                return jsonify({'error': 'Ligand PDB file(s) not found. Please prepare structure with ligands first.'}), 400
+        
+        print(f"Found {len(ligand_files)} ligand file(s) to process")
         
         import re
+        processed_ligands = []
+        errors = []
         
-        # Command 1: Calculate net charge using awk
-        print("Step 1: Calculating net charge from PDB file...")
-        # Look for charge in the last field (field 12) - pattern is letter+number+charge
-        awk_cmd = "awk '/^HETATM/ {if($NF ~ /[A-Z][0-9]-$/) charge--; if($NF ~ /[A-Z][0-9]\\+$/) charge++} END {print \"Net charge:\", charge+0}'"
-        cmd1 = f"{awk_cmd} {ligand_pdb}"
-        
-        try:
-            # Run awk command from the main directory, not output directory
-            result = subprocess.run(cmd1, shell=True, capture_output=True, text=True)
-            output = result.stdout.strip()
-            print(f"Awk output: '{output}'")
-            print(f"Awk stderr: '{result.stderr}'")
+        # Process each ligand individually
+        for i, ligand_pdb in enumerate(ligand_files, 1):
+            ligand_num = i
+            # Extract number from filename if available (e.g., 4_ligands_corrected_1.pdb -> 1)
+            match = re.search(r'_(\d+)\.pdb$', ligand_pdb.name)
+            if match:
+                ligand_num = int(match.group(1))
             
-            # Extract net charge from awk output
-            net_charge_match = re.search(r'Net charge:\s*(-?\d+)', output)
-            if net_charge_match:
-                net_charge = int(net_charge_match.group(1))
-                print(f"Calculated net charge: {net_charge}")
-            else:
-                print("Could not extract net charge from awk output, using 0")
+            ligand_mol2 = OUTPUT_DIR / f"4_ligands_corrected_{ligand_num}.mol2"
+            ligand_frcmod = OUTPUT_DIR / f"4_ligands_corrected_{ligand_num}.frcmod"
+            
+            print(f"\n{'='*60}")
+            print(f"Processing ligand {ligand_num}: {ligand_pdb.name}")
+            print(f"{'='*60}")
+            
+            # Step 1: Calculate net charge using awk
+            print(f"Step 1: Calculating net charge for ligand {ligand_num}...")
+            awk_cmd = "awk '/^HETATM/ {if($NF ~ /[A-Z][0-9]-$/) charge--; if($NF ~ /[A-Z][0-9]\\+$/) charge++} END {print \"Net charge:\", charge+0}'"
+            cmd1 = f"{awk_cmd} {ligand_pdb}"
+            
+            try:
+                result = subprocess.run(cmd1, shell=True, capture_output=True, text=True)
+                output = result.stdout.strip()
+                print(f"Awk output: '{output}'")
+                
+                net_charge_match = re.search(r'Net charge:\s*(-?\d+)', output)
+                if net_charge_match:
+                    net_charge = int(net_charge_match.group(1))
+                    print(f"Calculated net charge: {net_charge}")
+                else:
+                    print("Could not extract net charge from awk output, using 0")
+                    net_charge = 0
+            except Exception as e:
+                print(f"Error running awk command: {e}, using net charge 0")
                 net_charge = 0
-        except Exception as e:
-            print(f"Error running awk command: {e}, using net charge 0")
-            net_charge = 0
+            
+            # Step 2: Run antechamber
+            print(f"Step 2: Running antechamber for ligand {ligand_num} with net charge {net_charge}...")
+            cmd2 = f"antechamber -i 4_ligands_corrected_{ligand_num}.pdb -fi pdb -o 4_ligands_corrected_{ligand_num}.mol2 -fo mol2 -c bcc -at {force_field} -nc {net_charge}"
+            print(f"Running command: {cmd2}")
+            result2 = subprocess.run(cmd2, shell=True, cwd=str(OUTPUT_DIR), capture_output=True, text=True)
+            
+            print(f"antechamber return code: {result2.returncode}")
+            if result2.stdout:
+                print(f"antechamber stdout: {result2.stdout[:500]}...")  # Truncate long output
+            if result2.stderr:
+                print(f"antechamber stderr: {result2.stderr[:500]}...")
+            
+            if result2.returncode != 0:
+                error_msg = f'antechamber failed for ligand {ligand_num} with net charge {net_charge}. Error: {result2.stderr[:200]}'
+                print(f"ERROR: {error_msg}")
+                errors.append(error_msg)
+                continue
+            
+            # Step 3: Run parmchk2
+            print(f"Step 3: Running parmchk2 for ligand {ligand_num}...")
+            cmd3 = f"parmchk2 -i 4_ligands_corrected_{ligand_num}.mol2 -f mol2 -o 4_ligands_corrected_{ligand_num}.frcmod -a Y -s {s_param}"
+            print(f"Running command: {cmd3}")
+            result3 = subprocess.run(cmd3, shell=True, cwd=str(OUTPUT_DIR), capture_output=True, text=True)
+            
+            print(f"parmchk2 return code: {result3.returncode}")
+            if result3.stdout:
+                print(f"parmchk2 stdout: {result3.stdout[:500]}...")
+            if result3.stderr:
+                print(f"parmchk2 stderr: {result3.stderr[:500]}...")
+            
+            if result3.returncode != 0:
+                error_msg = f'parmchk2 failed for ligand {ligand_num}. Error: {result3.stderr[:200]}'
+                print(f"ERROR: {error_msg}")
+                errors.append(error_msg)
+                continue
+            
+            # Check if files were generated successfully
+            if ligand_mol2.exists() and ligand_frcmod.exists():
+                processed_ligands.append({
+                    'ligand_num': ligand_num,
+                    'net_charge': net_charge,
+                    'files': {
+                        'pdb': str(ligand_pdb),
+                        'mol2': str(ligand_mol2),
+                        'frcmod': str(ligand_frcmod)
+                    }
+                })
+                print(f"✅ Successfully processed ligand {ligand_num}")
+            else:
+                error_msg = f'Force field generation failed for ligand {ligand_num} - output files not created'
+                print(f"ERROR: {error_msg}")
+                errors.append(error_msg)
         
-        # Command 2: antechamber with calculated net charge
-        print(f"Step 2: Running antechamber with net charge {net_charge}...")
-        # Use relative paths and run in output directory
-        cmd2 = f"antechamber -i 4_ligands_corrected.pdb -fi pdb -o 4_ligands_corrected.mol2 -fo mol2 -c bcc -at {force_field} -nc {net_charge}"
-        print(f"Running command: {cmd2}")
-        result2 = subprocess.run(cmd2, shell=True, cwd=str(OUTPUT_DIR), capture_output=True, text=True)
-        
-        print(f"antechamber return code: {result2.returncode}")
-        print(f"antechamber stdout: {result2.stdout}")
-        print(f"antechamber stderr: {result2.stderr}")
-        
-        if result2.returncode != 0:
-            return jsonify({'error': f'antechamber failed with net charge {net_charge}. Error: {result2.stderr}'}), 500
-        
-        # Command 3: parmchk2
-        print("Step 3: Running parmchk2...")
-        # Use relative paths and run in output directory
-        cmd3 = f"parmchk2 -i 4_ligands_corrected.mol2 -f mol2 -o 4_ligands_corrected.frcmod -a Y -s {s_param}"
-        print(f"Running command: {cmd3}")
-        result3 = subprocess.run(cmd3, shell=True, cwd=str(OUTPUT_DIR), capture_output=True, text=True)
-        
-        print(f"parmchk2 return code: {result3.returncode}")
-        print(f"parmchk2 stdout: {result3.stdout}")
-        print(f"parmchk2 stderr: {result3.stderr}")
-        
-        if result3.returncode != 0:
-            return jsonify({'error': f'parmchk2 failed to generate force field parameters. Error: {result3.stderr}'}), 500
-        
-        # Check if files were generated successfully
-        print(f"After commands - MOL2 exists: {ligand_mol2.exists()}")
-        print(f"After commands - FRCMOD exists: {ligand_frcmod.exists()}")
-        print(f"Output directory contents: {list(OUTPUT_DIR.glob('*'))}")
-        
-        if not ligand_mol2.exists() or not ligand_frcmod.exists():
-            return jsonify({'error': 'Force field generation failed - output files not created'}), 500
+        if not processed_ligands:
+            return jsonify({
+                'error': f'Failed to process any ligands. Errors: {"; ".join(errors)}'
+            }), 500
         
         return jsonify({
             'success': True,
-            'message': f'Ligand force field ({force_field}) generated successfully with net charge {net_charge}',
-            'net_charge': net_charge,
-            'files': {
-                'mol2': str(ligand_mol2),
-                'frcmod': str(ligand_frcmod)
-            }
+            'message': f'Successfully processed {len(processed_ligands)} ligand(s) with force field {force_field}',
+            'ligands': processed_ligands,
+            'errors': errors if errors else None
         })
         
     except Exception as e:
@@ -1276,9 +1357,24 @@ def calculate_net_charge():
         if not tleap_ready_file.exists():
             return jsonify({'error': 'Structure not prepared. Please prepare structure first.'}), 400
         
-        # Check if ligand is present
-        ligand_pdb = OUTPUT_DIR / "4_ligands_corrected.pdb"
-        ligand_present = ligand_pdb.exists()
+        # Check if ligands are present (support multiple ligands)
+        ligand_mol2_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.mol2"))
+        ligand_frcmod_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.frcmod"))
+        
+        # Fallback: check for single ligand file (backward compatibility)
+        if not ligand_mol2_files:
+            single_mol2 = OUTPUT_DIR / "4_ligands_corrected.mol2"
+            single_frcmod = OUTPUT_DIR / "4_ligands_corrected.frcmod"
+            if single_mol2.exists() and single_frcmod.exists():
+                ligand_mol2_files = [single_mol2]
+                ligand_frcmod_files = [single_frcmod]
+        
+        ligand_present = len(ligand_mol2_files) > 0 and len(ligand_frcmod_files) > 0
+        
+        # Get ligand residue names
+        ligand_names = get_all_ligand_residue_names()
+        while len(ligand_names) < len(ligand_mol2_files):
+            ligand_names.append(f"LIG{len(ligand_names) + 1}")
         
         # Create dynamic tleap input file
         tleap_input = OUTPUT_DIR / "calc_charge_on_system.in"
@@ -1292,12 +1388,18 @@ def calculate_net_charge():
             f.write("source leaprc.gaff2\n\n")
             
             if ligand_present:
-                # Load ligand parameters and structure
-                f.write("loadamberparams 4_ligands_corrected.frcmod\n\n")
-                f.write("COB = loadmol2 4_ligands_corrected.mol2\n\n")
+                # Load all ligand parameters and structures
+                for frcmod_file in ligand_frcmod_files:
+                    f.write(f"loadamberparams {frcmod_file.name}\n")
+                f.write("\n")
+                
+                for mol2_file, lig_name in zip(ligand_mol2_files, ligand_names):
+                    f.write(f"{lig_name} = loadmol2 {mol2_file.name}\n")
+                f.write("\n")
             
             f.write("x = loadpdb tleap_ready.pdb\n\n")
             f.write("charge x\n\n")
+            f.write("quit\n")
         
         # Run tleap command
         print("Running tleap to calculate system charge...")
@@ -1841,29 +1943,37 @@ def get_generated_files():
         return jsonify({'error': f'Failed to read files: {str(e)}'}), 500
 
 def get_ligand_residue_name():
-    """Extract ligand residue name from tleap_ready.pdb"""
-    try:
-        with open(OUTPUT_DIR / "tleap_ready.pdb", 'r') as f:
-            for line in f:
-                if line.startswith('HETATM'):
-                    # Extract residue name (columns 18-20)
-                    residue_name = line[17:20].strip()
-                    if residue_name and residue_name not in ['HOH', 'WAT', 'TIP', 'SPC']:  # Exclude water
-                        return residue_name
-        return "LIG"  # Default fallback
-    except:
-        return "LIG"  # Default fallback
+    """Extract first ligand residue name from tleap_ready.pdb (for backward compatibility)"""
+    ligand_names = get_all_ligand_residue_names()
+    return ligand_names[0] if ligand_names else "LIG"
 
 def generate_ff_parameters_file(force_field, water_model, add_ions, distance):
     """Generate the final force field parameters file with dynamic values"""
     # Debug logging
     print(f"DEBUG: force_field={force_field}, water_model={water_model}, add_ions={add_ions}, distance={distance}")
     
-    # Determine if ligand is present
-    ligand_present = (OUTPUT_DIR / "4_ligands_corrected.mol2").exists()
+    # Find all ligand mol2 files (support multiple ligands)
+    ligand_mol2_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.mol2"))
+    ligand_frcmod_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.frcmod"))
     
-    # Get dynamic ligand residue name
-    ligand_name = get_ligand_residue_name()
+    # Fallback: check for single ligand file (backward compatibility)
+    if not ligand_mol2_files:
+        single_mol2 = OUTPUT_DIR / "4_ligands_corrected.mol2"
+        single_frcmod = OUTPUT_DIR / "4_ligands_corrected.frcmod"
+        if single_mol2.exists() and single_frcmod.exists():
+            ligand_mol2_files = [single_mol2]
+            ligand_frcmod_files = [single_frcmod]
+    
+    ligand_present = len(ligand_mol2_files) > 0 and len(ligand_frcmod_files) > 0
+    
+    # Get dynamic ligand residue names
+    ligand_names = []
+    if ligand_present:
+        # Extract ligand residue names from tleap_ready.pdb
+        ligand_names = get_all_ligand_residue_names()
+        # If we have more ligands than names, generate default names
+        while len(ligand_names) < len(ligand_mol2_files):
+            ligand_names.append(f"LIG{len(ligand_names) + 1}")
     
     # Build the content dynamically
     content = f"source leaprc.protein.{force_field}\n"
@@ -1875,11 +1985,19 @@ def generate_ff_parameters_file(force_field, water_model, add_ions, distance):
     elif water_model == "spce":
         content += "source leaprc.water.spce\n"
     
-    # Add ligand-related commands only if ligand is present
+    # Add ligand-related commands only if ligands are present
     if ligand_present:
         content += "source leaprc.gaff2\n\n"
-        content += "loadamberparams 4_ligands_corrected.frcmod\n\n"
-        content += f"{ligand_name} = loadmol2 4_ligands_corrected.mol2\n\n"
+        
+        # Load all frcmod files
+        for i, frcmod_file in enumerate(ligand_frcmod_files, 1):
+            content += f"loadamberparams {frcmod_file.name}\n"
+        content += "\n"
+        
+        # Load all mol2 files with unique variable names
+        for i, (mol2_file, lig_name) in enumerate(zip(ligand_mol2_files, ligand_names), 1):
+            content += f"{lig_name} = loadmol2 {mol2_file.name}\n"
+        content += "\n"
     else:
         content += "\n"
     
@@ -1910,6 +2028,30 @@ def generate_ff_parameters_file(force_field, water_model, add_ions, distance):
     # Write the file
     with open(OUTPUT_DIR / "generate_ff_parameters.in", 'w') as f:
         f.write(content)
+
+def get_all_ligand_residue_names():
+    """Extract all unique ligand residue names from tleap_ready.pdb"""
+    ligand_names = []
+    try:
+        tleap_ready_path = OUTPUT_DIR / "tleap_ready.pdb"
+        if not tleap_ready_path.exists():
+            return []
+        
+        seen_residues = set()
+        with open(tleap_ready_path, 'r') as f:
+            for line in f:
+                if line.startswith('HETATM'):
+                    # Extract residue name (columns 18-20)
+                    residue_name = line[17:20].strip()
+                    if residue_name and residue_name not in ['HOH', 'WAT', 'TIP', 'SPC', 'NA', 'CL']:
+                        if residue_name not in seen_residues:
+                            ligand_names.append(residue_name)
+                            seen_residues.add(residue_name)
+        
+        return ligand_names
+    except Exception as e:
+        logger.warning(f"Could not extract ligand residue names: {e}")
+        return []
 
 @app.route('/api/generate-ff-parameters', methods=['POST'])
 def generate_ff_parameters():

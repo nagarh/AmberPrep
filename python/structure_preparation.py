@@ -258,46 +258,305 @@ def convert_atom_to_hetatm(pdb_file):
         print(f"Error converting ATOM to HETATM: {e}")
         return False
 
-def correct_ligand_with_pymol(ligand_file, corrected_file):
-    """Correct ligand using PyMOL"""
+def extract_original_residue_info(ligand_file):
+    """Extract original residue name, chain ID, and residue number from ligand PDB file"""
+    residue_info = {}
+    try:
+        with open(ligand_file, 'r') as f:
+            for line in f:
+                if line.startswith(('ATOM', 'HETATM')):
+                    resname = line[17:20].strip()
+                    chain_id = line[21:22].strip()
+                    resnum = line[22:26].strip()
+                    # Store the first residue info we find (assuming single residue per file)
+                    if resname and resname not in residue_info:
+                        residue_info = {
+                            'resname': resname,
+                            'chain_id': chain_id,
+                            'resnum': resnum
+                        }
+                        break  # We only need the first residue info
+        return residue_info
+    except Exception as e:
+        print(f"Error extracting residue info: {e}")
+        return {}
+
+def restore_residue_info_in_pdb(pdb_file, original_resname, original_chain_id, original_resnum):
+    """Restore original residue name, chain ID, and residue number in PDB file"""
+    try:
+        with open(pdb_file, 'r') as f:
+            lines = f.readlines()
+        
+        restored_lines = []
+        for line in lines:
+            if line.startswith(('ATOM', 'HETATM')):
+                # Restore residue name (columns 17-20)
+                restored_line = line[:17] + f"{original_resname:>3}" + line[20:]
+                # Restore chain ID (column 21)
+                if original_chain_id:
+                    restored_line = restored_line[:21] + original_chain_id + restored_line[22:]
+                # Restore residue number (columns 22-26)
+                if original_resnum:
+                    restored_line = restored_line[:22] + f"{original_resnum:>4}" + restored_line[26:]
+                restored_lines.append(restored_line)
+            elif line.startswith('MASTER'):
+                # Skip MASTER records
+                continue
+            else:
+                restored_lines.append(line)
+        
+        with open(pdb_file, 'w') as f:
+            f.writelines(restored_lines)
+        
+        print(f"Restored residue info: {original_resname} {original_chain_id} {original_resnum} in {pdb_file}")
+        return True
+    except Exception as e:
+        print(f"Error restoring residue info: {e}")
+        return False
+
+def correct_ligand_with_openbabel(ligand_file, corrected_file):
+    """Correct ligand using OpenBabel (add hydrogens at pH 7.4) and preserve original residue info"""
     ligand_path = os.path.abspath(ligand_file)
     corrected_path = os.path.abspath(corrected_file)
     if not os.path.isfile(ligand_path) or os.path.getsize(ligand_path) == 0:
         print("Ligand file missing or empty:", ligand_path)
         return False
 
-    # Use PyMOL to add hydrogens and save corrected ligand
-    cmd = f'pymol -cq {ligand_path} -d "h_add; save {corrected_path}; quit"'
-    return run_command(cmd, f"Correcting ligand with PyMOL")
+    # Extract original residue info before OpenBabel processing
+    residue_info = extract_original_residue_info(ligand_path)
+    original_resname = residue_info.get('resname', 'UNL')
+    original_chain_id = residue_info.get('chain_id', '')
+    original_resnum = residue_info.get('resnum', '1')
+    
+    print(f"Original residue info: {original_resname} {original_chain_id} {original_resnum}")
+
+    # Use OpenBabel to add hydrogens at pH 7.4
+    cmd = f'obabel -i pdb {ligand_path} -o pdb -O {corrected_path} -p 7.4'
+    success = run_command(cmd, f"Correcting ligand with OpenBabel")
+    
+    if not success:
+        return False
+    
+    # Restore original residue name, chain ID, and residue number
+    if residue_info:
+        restore_residue_info_in_pdb(corrected_path, original_resname, original_chain_id, original_resnum)
+    
+    return True
+
+def split_ligands_by_residue(ligand_file, output_dir):
+    """Split multi-ligand PDB file into individual ligand files using MDAnalysis (one file per residue)
+    This is more robust than splitting by TER records as it properly handles residue-based splitting.
+    """
+    ligand_files = []
+    try:
+        ligand_path = os.path.abspath(ligand_file)
+        output_dir_abs = os.path.abspath(output_dir)
+        
+        # Use MDAnalysis to split ligands by residue - this is the robust method
+        # Command: python -c "import MDAnalysis as mda; u=mda.Universe('3_ligands_extracted.pdb'); [res.atoms.write(f'3_ligand_extracted_{i}.pdb') for i,res in enumerate(u.residues,1)]"
+        cmd = f'''python -c "import MDAnalysis as mda; import os; u=mda.Universe('{ligand_path}'); os.chdir('{output_dir_abs}'); [res.atoms.write(f'3_ligand_extracted_{{i}}.pdb') for i,res in enumerate(u.residues,1)]"'''
+        
+        print(f"Running MDAnalysis command to split ligands by residue...")
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=output_dir_abs)
+        
+        if result.returncode != 0:
+            print(f"Error running MDAnalysis command: {result.stderr}")
+            print(f"Command output: {result.stdout}")
+            return []
+        
+        # Collect all generated ligand files
+        ligand_files = []
+        for f in os.listdir(output_dir):
+            if f.startswith('3_ligand_extracted_') and f.endswith('.pdb'):
+                ligand_files.append(os.path.join(output_dir, f))
+        
+        # Sort by number in filename (e.g., 3_ligand_extracted_1.pdb, 3_ligand_extracted_2.pdb, ...)
+        ligand_files.sort(key=lambda x: int(os.path.basename(x).split('_')[-1].split('.')[0]))
+        
+        print(f"Split {len(ligand_files)} ligand(s) from {ligand_file}")
+        return ligand_files
+    except Exception as e:
+        print(f"Error splitting ligands: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
 def remove_connect_records(pdb_file):
-    """Remove CONNECT records from PDB file"""
+    """Remove CONNECT and MASTER records from PDB file"""
     try:
         with open(pdb_file, 'r') as f:
             lines = f.readlines()
         
-        # Filter out CONNECT records
-        filtered_lines = [line for line in lines if not line.startswith('CONECT')]
+        # Filter out CONNECT and MASTER records
+        filtered_lines = [line for line in lines if not line.startswith(('CONECT', 'MASTER'))]
         
         with open(pdb_file, 'w') as f:
             f.writelines(filtered_lines)
         
-        print(f"Removed CONNECT records from {pdb_file}")
+        print(f"Removed CONNECT and MASTER records from {pdb_file}")
         return True
     except Exception as e:
-        print(f"Error removing CONNECT records: {e}")
+        print(f"Error removing CONNECT/MASTER records: {e}")
         return False
 
-def merge_protein_and_ligand(protein_file, ligand_file, output_file):
-    """Merge capped protein and corrected ligand with proper PDB formatting"""
+def convert_atom_to_hetatm_in_ligand(pdb_file):
+    """Convert ATOM records to HETATM in ligand PDB file for consistency"""
+    try:
+        with open(pdb_file, 'r') as f:
+            lines = f.readlines()
+        
+        converted_lines = []
+        converted_count = 0
+        for line in lines:
+            if line.startswith('ATOM'):
+                # Replace ATOM with HETATM, preserving the rest of the line
+                converted_line = 'HETATM' + line[6:]
+                converted_lines.append(converted_line)
+                converted_count += 1
+            else:
+                converted_lines.append(line)
+        
+        with open(pdb_file, 'w') as f:
+            f.writelines(converted_lines)
+        
+        if converted_count > 0:
+            print(f"Converted {converted_count} ATOM record(s) to HETATM in {pdb_file}")
+        
+        return True
+    except Exception as e:
+        print(f"Error converting ATOM to HETATM: {e}")
+        return False
+
+def make_atom_names_distinct(pdb_file):
+    """Make all atom names distinct (C1, C2, O1, O2, H1, H2, etc.) for antechamber compatibility
+    Antechamber requires each atom to have a unique name.
+    """
+    try:
+        from collections import defaultdict
+        
+        with open(pdb_file, 'r') as f:
+            lines = f.readlines()
+        
+        # Track counts for each element type
+        element_counts = defaultdict(int)
+        modified_lines = []
+        modified_count = 0
+        
+        for line in lines:
+            if line.startswith(('ATOM', 'HETATM')):
+                # Extract element from the last field (column 76-78) or from atom name (columns 12-16)
+                # Try to get element from the last field first (more reliable)
+                element = line[76:78].strip()
+                
+                # If element not found in last field, try to extract from atom name
+                if not element:
+                    atom_name = line[12:16].strip()
+                    # Extract element symbol (first letter, or first two letters for two-letter elements)
+                    if len(atom_name) >= 1:
+                        # Check for two-letter elements (common ones: Cl, Br, etc.)
+                        if len(atom_name) >= 2 and atom_name[:2].upper() in ['CL', 'BR', 'MG', 'CA', 'ZN', 'FE', 'MN', 'CU', 'NI', 'CO', 'CD', 'HG', 'PB', 'SR', 'BA', 'RB', 'CS', 'LI']:
+                            element = atom_name[:2].upper()
+                        else:
+                            element = atom_name[0].upper()
+                
+                # Increment count for this element
+                element_counts[element] += 1
+                count = element_counts[element]
+                
+                # Create distinct atom name: Element + number (e.g., C1, C2, O1, O2, H1, H2)
+                # Atom name is in columns 12-16 (4 characters, right-aligned)
+                distinct_name = f"{element}{count}"
+                
+                # Ensure the name fits in 4 characters (right-aligned)
+                if len(distinct_name) > 4:
+                    # For long element names, use abbreviation or truncate
+                    if element == 'CL':
+                        distinct_name = f"Cl{count}"[:4]
+                    elif element == 'BR':
+                        distinct_name = f"Br{count}"[:4]
+                    else:
+                        distinct_name = distinct_name[:4]
+                
+                # Replace atom name (columns 12-16, right-aligned)
+                modified_line = line[:12] + f"{distinct_name:>4}" + line[16:]
+                modified_lines.append(modified_line)
+                modified_count += 1
+            else:
+                modified_lines.append(line)
+        
+        with open(pdb_file, 'w') as f:
+            f.writelines(modified_lines)
+        
+        if modified_count > 0:
+            print(f"Made {modified_count} atom name(s) distinct in {pdb_file}")
+            print(f"Element counts: {dict(element_counts)}")
+        
+        return True
+    except Exception as e:
+        print(f"Error making atom names distinct: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def sanity_check_ligand_pdb(pdb_file):
+    """Perform sanity checks on ligand PDB file after OpenBabel processing:
+    1. Remove CONECT and MASTER records
+    2. Convert ATOM records to HETATM for consistency
+    3. Make all atom names distinct (C1, C2, O1, O2, H1, H2, etc.) for antechamber compatibility
+    """
+    try:
+        # Step 1: Remove CONECT and MASTER records
+        if not remove_connect_records(pdb_file):
+            return False
+        
+        # Step 2: Convert ATOM to HETATM for consistency
+        if not convert_atom_to_hetatm_in_ligand(pdb_file):
+            return False
+        
+        # Step 3: Make atom names distinct (required by antechamber)
+        if not make_atom_names_distinct(pdb_file):
+            return False
+        
+        print(f"Sanity check completed for {pdb_file}")
+        return True
+    except Exception as e:
+        print(f"Error in sanity check: {e}")
+        return False
+
+def merge_protein_and_ligand(protein_file, ligand_file, output_file, ligand_lines_list=None, ligand_groups=None):
+    """Merge capped protein and corrected ligand(s) with proper PDB formatting
+    
+    Args:
+        protein_file: Path to protein PDB file
+        ligand_file: Path to ligand PDB file (optional, if ligand_lines_list or ligand_groups is provided)
+        output_file: Path to output merged PDB file
+        ligand_lines_list: List of ligand lines (optional, for backward compatibility - single ligand)
+        ligand_groups: List of ligand line groups, where each group is a list of lines for one ligand (for multiple ligands with TER separation)
+    """
     try:
         # Read protein file
         with open(protein_file, 'r') as f:
             protein_lines = f.readlines()
         
-        # Read ligand file
-        with open(ligand_file, 'r') as f:
-            ligand_lines = f.readlines()
+        # Get ligand lines - prioritize ligand_groups for multiple ligands
+        if ligand_groups is not None:
+            # Multiple ligands: each group will be separated by TER
+            ligand_groups_processed = ligand_groups
+        elif ligand_lines_list is not None:
+            # Single ligand: wrap in a list for consistent processing
+            ligand_groups_processed = [ligand_lines_list] if ligand_lines_list else []
+        elif ligand_file:
+            # Read ligand file
+            with open(ligand_file, 'r') as f:
+                ligand_lines = f.readlines()
+            # Process ligand file: remove header info (CRYST, REMARK, etc.) and keep only ATOM/HETATM
+            ligand_processed = []
+            for line in ligand_lines:
+                if line.startswith(('ATOM', 'HETATM')):
+                    ligand_processed.append(line)
+            ligand_groups_processed = [ligand_processed] if ligand_processed else []
+        else:
+            ligand_groups_processed = []
         
         # Process protein file: remove 'END' and add properly formatted 'TER'
         protein_processed = []
@@ -320,14 +579,29 @@ def merge_protein_and_ligand(protein_file, ligand_file, output_file):
                 if line.startswith('ATOM'):
                     last_atom_line = line
         
-        # Process ligand file: remove header info (CRYST, REMARK, etc.) and keep only ATOM/HETATM
-        ligand_processed = []
-        for line in ligand_lines:
-            if line.startswith(('ATOM', 'HETATM')):
-                ligand_processed.append(line)
+        # Combine ligands with TER records between each ligand
+        ligand_content = []
+        for i, ligand_group in enumerate(ligand_groups_processed):
+            if ligand_group:  # Only process non-empty groups
+                # Add ligand atoms
+                ligand_content.extend(ligand_group)
+                # Add TER record after each ligand (except the last one, which will be followed by END)
+                if i < len(ligand_groups_processed) - 1:
+                    # Get last atom info from current ligand group to create TER
+                    if ligand_group:
+                        last_ligand_atom = ligand_group[-1]
+                        if last_ligand_atom.startswith(('ATOM', 'HETATM')):
+                            atom_num = last_ligand_atom[6:11].strip()
+                            res_name = last_ligand_atom[17:20].strip()
+                            chain_id = last_ligand_atom[21:22].strip()
+                            res_num = last_ligand_atom[22:26].strip()
+                            ter_line = f"TER    {atom_num:>5}      {res_name} {chain_id}{res_num}\n"
+                            ligand_content.append(ter_line)
+                        else:
+                            ligand_content.append('TER\n')
         
-        # Combine: protein + TER + ligand + END (no extra newline between TER and ligand)
-        merged_content = ''.join(protein_processed) + ''.join(ligand_processed) + 'END\n'
+        # Combine: protein + TER + ligand(s) with TER between ligands + END
+        merged_content = ''.join(protein_processed) + ''.join(ligand_content) + 'END\n'
         
         with open(output_file, 'w') as f:
             f.write(merged_content)
@@ -335,6 +609,8 @@ def merge_protein_and_ligand(protein_file, ligand_file, output_file):
         return True
     except Exception as e:
         print(f"Error merging files: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def prepare_structure(pdb_content, options, output_dir="output"):
@@ -427,6 +703,7 @@ def prepare_structure(pdb_content, options, output_dir="output"):
         # Step 3: Handle ligands (use pre-extracted ligand file)
         preserve_ligands = options.get('preserve_ligands', True)
         ligand_present = False
+        ligand_count = 0
         
         if preserve_ligands:
             print("Step 3: Processing pre-extracted ligands...")
@@ -439,23 +716,63 @@ def prepare_structure(pdb_content, options, output_dir="output"):
                 ligand_present = True
                 print("Found pre-extracted ligands")
                 
-                # Correct ligand with PyMOL
-                if not correct_ligand_with_pymol(ligand_file, ligand_corrected_file):
-                    print("Error: Failed to process ligand")
-                    return {
-                        'error': 'Failed to process ligand with PyMOL',
-                        'prepared_structure': '',
-                        'original_atoms': 0,
-                        'prepared_atoms': 0,
-                        'removed_components': {},
-                        'added_capping': {},
-                        'preserved_ligands': 0,
-                        'ligand_present': False
-                    }
+                # Split ligands into individual files using MDAnalysis (by residue)
+                individual_ligand_files = split_ligands_by_residue(ligand_file, output_dir)
+                ligand_count = len(individual_ligand_files)
                 
-                # Merge protein and ligand
-                if not merge_protein_and_ligand(protein_capped_file, ligand_corrected_file, tleap_ready_file):
-                    raise Exception("Failed to merge protein and ligand")
+                if ligand_count == 0:
+                    print("Warning: No ligands could be extracted from file")
+                    shutil.copy2(protein_capped_file, tleap_ready_file)
+                else:
+                    print(f"Processing {ligand_count} ligand(s) individually...")
+                    
+                    # Process each ligand: OpenBabel -> sanity check -> final corrected file
+                    corrected_ligand_files = []
+                    for i, individual_file in enumerate(individual_ligand_files, 1):
+                        # OpenBabel output file (intermediate, kept for reference)
+                        obabel_file = os.path.join(output_dir, f"4_ligands_corrected_obabel_{i}.pdb")
+                        # Final corrected file (after sanity checks)
+                        corrected_file = os.path.join(output_dir, f"4_ligands_corrected_{i}.pdb")
+                        
+                        # Use OpenBabel to add hydrogens (write to obabel_file)
+                        if not correct_ligand_with_openbabel(individual_file, obabel_file):
+                            print(f"Error: Failed to process ligand {i} with OpenBabel")
+                            continue
+                        
+                        # Copy obabel file to corrected file before sanity check
+                        shutil.copy2(obabel_file, corrected_file)
+                        
+                        # Perform sanity check on corrected_file: remove CONECT/MASTER, convert ATOM to HETATM, make names distinct
+                        if not sanity_check_ligand_pdb(corrected_file):
+                            print(f"Warning: Sanity check failed for ligand {i}, but continuing...")
+                        
+                        corrected_ligand_files.append(corrected_file)
+                    
+                    if not corrected_ligand_files:
+                        print("Error: Failed to process any ligands")
+                        return {
+                            'error': 'Failed to process ligands with OpenBabel',
+                            'prepared_structure': '',
+                            'original_atoms': 0,
+                            'prepared_atoms': 0,
+                            'removed_components': {},
+                            'added_capping': {},
+                            'preserved_ligands': 0,
+                            'ligand_present': False
+                        }
+                    
+                    # Merge all corrected ligands into a single file for tleap_ready
+                    # Read all corrected ligand files and group them by ligand (for TER separation)
+                    all_ligand_groups = []
+                    for corrected_lig_file in corrected_ligand_files:
+                        with open(corrected_lig_file, 'r') as f:
+                            lig_lines = [line for line in f if line.startswith(('ATOM', 'HETATM'))]
+                            if lig_lines:  # Only add non-empty ligand groups
+                                all_ligand_groups.append(lig_lines)
+                    
+                    # Merge protein and all ligands (with TER records between ligands)
+                    if not merge_protein_and_ligand(protein_capped_file, None, tleap_ready_file, ligand_groups=all_ligand_groups):
+                        raise Exception("Failed to merge protein and ligands")
             else:
                 print("No ligands found in pre-extracted file, using protein only")
                 # Copy protein file to tleap_ready
@@ -525,11 +842,7 @@ def prepare_structure(pdb_content, options, output_dir="output"):
                 }
             
             # Count preserved ligands from the pre-extracted file
-            preserved_ligands = 0
-            if ligand_present and preserve_ligands:
-                with open(ligand_file, 'r') as f:
-                    ligand_lines = [line for line in f if line.startswith('HETATM')]
-                preserved_ligands = len(set(line[17:20].strip() for line in ligand_lines))
+            preserved_ligands = ligand_count if ligand_present and preserve_ligands else 0
             
             result = {
                 'prepared_structure': prepared_content,

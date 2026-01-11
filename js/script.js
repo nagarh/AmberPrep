@@ -765,7 +765,34 @@ class MDSimulationPipeline {
             const result = await response.json();
 
             if (result.success) {
-                alert(`✅ ${result.message}\n\nNet charge: ${result.net_charge}\n\nGenerated files:\n- ${result.files.mol2}\n- ${result.files.frcmod}`);
+                // Handle both single ligand (backward compatibility) and multiple ligands
+                let message = `✅ ${result.message}\n\n`;
+                
+                if (result.ligands && result.ligands.length > 0) {
+                    // Multiple ligands format
+                    result.ligands.forEach(ligand => {
+                        message += `Ligand ${ligand.ligand_num}:\n`;
+                        message += `  Net charge: ${ligand.net_charge}\n`;
+                        message += `  Files:\n`;
+                        message += `    - ${ligand.files.mol2}\n`;
+                        message += `    - ${ligand.files.frcmod}\n\n`;
+                    });
+                } else if (result.files) {
+                    // Single ligand format (backward compatibility)
+                    message += `Net charge: ${result.net_charge || 'N/A'}\n\n`;
+                    message += `Generated files:\n`;
+                    message += `- ${result.files.mol2}\n`;
+                    message += `- ${result.files.frcmod}\n`;
+                }
+                
+                if (result.errors && result.errors.length > 0) {
+                    message += `\n⚠️ Warnings:\n`;
+                    result.errors.forEach(err => {
+                        message += `- ${err}\n`;
+                    });
+                }
+                
+                alert(message);
             } else {
                 alert(`❌ Error: ${result.error}`);
             }
@@ -2561,8 +2588,11 @@ echo "Analysis completed! Results saved in analysis/ directory"
          * Returns: { n_terminal: {start, end, count}, c_terminal: {start, end, count} }
          * 
          * A missing residue is at the edge ONLY if:
-         * - N-terminal: There are NO residues present in the PDB BEFORE the first missing residue
-         * - C-terminal: There are NO residues present in the PDB AFTER the last missing residue
+         * - N-terminal: There are NO residues present in the sequence BEFORE the first missing residue
+         * - C-terminal: There are NO residues present in the sequence AFTER the last missing residue
+         * 
+         * This ensures we only trim residues that are truly at the edges, not internal missing residues
+         * that have sequence residues before/after them.
          */
         if (!missingResidues || !missingResidues[chain] || !missingResidues[chain].residues) {
             return { n_terminal: null, c_terminal: null };
@@ -2573,6 +2603,20 @@ echo "Analysis completed! Results saved in analysis/ directory"
             return { n_terminal: null, c_terminal: null };
         }
 
+        // Get the chain sequence to check for residues present before/after missing residues
+        const sequence = this.chainSequences && this.chainSequences[chain];
+        // sequenceStart tells us what residue number corresponds to position 0 in the sequence
+        // If not set, default to 1 (canonical sequence starting at residue 1)
+        const sequenceStart = this.chainSequenceStart && this.chainSequenceStart[chain] !== undefined 
+            ? this.chainSequenceStart[chain] 
+            : 1;
+        
+        // If we don't have the sequence, we can't check for residues before/after
+        if (!sequence) {
+            console.warn(`No sequence available for chain ${chain}, cannot check edge residues`);
+            return { n_terminal: null, c_terminal: null };
+        }
+        
         // Get actual first and last residue numbers from PDB
         const firstPdbResidue = this.chainFirstResidue && this.chainFirstResidue[chain];
         const lastPdbResidue = this.chainLastResidue && this.chainLastResidue[chain];
@@ -2588,13 +2632,18 @@ echo "Analysis completed! Results saved in analysis/ directory"
         // Extract residue numbers and sort
         const resNums = residues.map(([resname, resnum]) => resnum).sort((a, b) => a - b);
         
+        // Create a set of missing residue numbers for quick lookup
+        const missingResNums = new Set(resNums);
+        
         // Debug logging (after resNums is declared)
         console.log(`Chain ${chain} edge detection:`, {
             firstPdbResidue,
             lastPdbResidue,
             missingResidueCount: residues.length,
             firstMissing: resNums.length > 0 ? resNums[0] : null,
-            lastMissing: resNums.length > 0 ? resNums[resNums.length - 1] : null
+            lastMissing: resNums.length > 0 ? resNums[resNums.length - 1] : null,
+            sequenceLength: sequence ? sequence.length : 0,
+            sequenceStart: sequenceStart
         });
         
         // Find all consecutive ranges
@@ -2619,47 +2668,75 @@ echo "Analysis completed! Results saved in analysis/ directory"
         }
 
         // Identify N-terminal edge
-        // A missing residue is N-terminal ONLY if the first missing residue is BEFORE or AT the first PDB residue
-        // AND there are no residues present before the first missing residue
+        // A missing residue is N-terminal ONLY if:
+        // 1. The first missing residue is at or before the first PDB residue (no PDB residues before it)
+        // 2. AND there are NO sequence residues present BEFORE the first missing residue in the sequence
         let nTerminal = null;
-        if (ranges.length > 0) {
+        if (ranges.length > 0 && sequence) {
             const firstRange = ranges[0];
             // Check if the first missing residue is at or before the first PDB residue
-            // This means there are no residues present before the missing residues
             if (firstRange.start <= firstPdbResidue) {
-                nTerminal = {
-                    start: firstRange.start,
-                    end: firstRange.end,
-                    count: firstRange.end - firstRange.start + 1
-                };
+                // Map the first missing residue number to sequence position
+                // sequenceStart maps position 0 to a residue number, so: position = residueNum - sequenceStart
+                const firstMissingPos = firstRange.start - sequenceStart;
+                
+                // Check if there are any non-missing residues in the sequence BEFORE this position
+                let hasResiduesBefore = false;
+                for (let pos = 0; pos < firstMissingPos && pos < sequence.length; pos++) {
+                    const residueNum = sequenceStart + pos; // Map position to residue number
+                    // If this residue is not missing, then we have residues before the missing ones
+                    if (!missingResNums.has(residueNum)) {
+                        hasResiduesBefore = true;
+                        break;
+                    }
+                }
+                
+                // Only mark as N-terminal edge if there are NO residues before the missing ones
+                if (!hasResiduesBefore) {
+                    nTerminal = {
+                        start: firstRange.start,
+                        end: firstRange.end,
+                        count: firstRange.end - firstRange.start + 1
+                    };
+                }
             }
         }
 
         // Identify C-terminal edge
         // A missing residue is C-terminal ONLY if:
-        // 1. The missing residues extend beyond the last PDB residue (lastRange.end > lastPdbResidue)
-        //    This means there are no residues present after the missing residues
-        // 2. AND the missing residues start at or after the last PDB residue
-        //    (lastRange.start >= lastPdbResidue OR lastRange.start > lastPdbResidue)
-        // This ensures the missing residues are truly at the C-terminal edge with no gaps
+        // 1. The missing residues extend beyond the last PDB residue (no PDB residues after them)
+        // 2. AND there are NO sequence residues present AFTER the last missing residue in the sequence
         let cTerminal = null;
-        if (ranges.length > 0) {
+        if (ranges.length > 0 && sequence) {
             const lastRange = ranges[ranges.length - 1];
             // Check if the missing residues extend beyond the last PDB residue
-            // AND start at or after the last PDB residue (no gap between last PDB and missing)
-            // This ensures there are no residues present after the missing residues
-            // Missing residues are at C-terminal edge if:
-            // 1. They extend beyond the last PDB residue (no residues after them)
-            // 2. They start at or right after the last PDB residue (no gap)
             const extendsBeyond = lastRange.end > lastPdbResidue;
             const noGap = lastRange.start <= lastPdbResidue + 1;
             
             if (extendsBeyond && noGap) {
-                cTerminal = {
-                    start: lastRange.start,
-                    end: lastRange.end,
-                    count: lastRange.end - lastRange.start + 1
-                };
+                // Map the last missing residue number to sequence position
+                // sequenceStart maps position 0 to a residue number, so: position = residueNum - sequenceStart
+                const lastMissingPos = lastRange.end - sequenceStart;
+                
+                // Check if there are any non-missing residues in the sequence AFTER this position
+                let hasResiduesAfter = false;
+                for (let pos = lastMissingPos + 1; pos < sequence.length; pos++) {
+                    const residueNum = sequenceStart + pos; // Map position to residue number
+                    // If this residue is not missing, then we have residues after the missing ones
+                    if (!missingResNums.has(residueNum)) {
+                        hasResiduesAfter = true;
+                        break;
+                    }
+                }
+                
+                // Only mark as C-terminal edge if there are NO residues after the missing ones
+                if (!hasResiduesAfter) {
+                    cTerminal = {
+                        start: lastRange.start,
+                        end: lastRange.end,
+                        count: lastRange.end - lastRange.start + 1
+                    };
+                }
             }
         }
 
