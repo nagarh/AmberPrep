@@ -4,7 +4,7 @@ MD Simulation Pipeline - Flask Backend
 Provides API endpoints for protein processing and file generation
 """
 
-from flask import Flask, request, jsonify, send_file, render_template, send_from_directory
+from flask import Flask, request, jsonify, send_file, render_template, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 import os
 import json
@@ -1212,141 +1212,202 @@ def parse_structure_endpoint():
         logger.error(f"Error parsing structure: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+def _format_log(message, log_type='info'):
+    """Helper function to format log message for SSE"""
+    data = json.dumps({'type': log_type, 'message': message})
+    return f"data: {data}\n\n"
+
 @app.route('/api/generate-ligand-ff', methods=['POST'])
+@stream_with_context
 def generate_ligand_ff():
-    """Generate force field parameters for multiple ligands"""
-    try:
-        data = request.get_json()
-        force_field = data.get('force_field', 'gaff2')
-        
-        # Determine the s parameter based on force field
-        s_param = 2 if force_field == 'gaff2' else 1
-        
-        print(f"Working directory: {os.getcwd()}")
-        print(f"Output directory: {OUTPUT_DIR}")
-        
-        # Find all individual ligand files (4_ligands_corrected_1.pdb, 4_ligands_corrected_2.pdb, etc.)
-        # Exclude OpenBabel output files (4_ligands_corrected_obabel_*.pdb)
-        ligand_files = sorted([f for f in OUTPUT_DIR.glob("4_ligands_corrected_*.pdb") if "_obabel_" not in f.name])
-        
-        if not ligand_files:
-            # Fallback: check for single ligand file (backward compatibility)
-            single_ligand_pdb = OUTPUT_DIR / "4_ligands_corrected.pdb"
-            if single_ligand_pdb.exists():
-                ligand_files = [single_ligand_pdb]
-            else:
-                return jsonify({'error': 'Ligand PDB file(s) not found. Please prepare structure with ligands first.'}), 400
-        
-        print(f"Found {len(ligand_files)} ligand file(s) to process")
-        
-        import re
-        processed_ligands = []
-        errors = []
-        
-        # Process each ligand individually
-        for i, ligand_pdb in enumerate(ligand_files, 1):
-            ligand_num = i
-            # Extract number from filename if available (e.g., 4_ligands_corrected_1.pdb -> 1)
-            match = re.search(r'_(\d+)\.pdb$', ligand_pdb.name)
-            if match:
-                ligand_num = int(match.group(1))
+    """Generate force field parameters for multiple ligands with streaming logs"""
+    def generate():
+        try:
+            data = request.get_json()
+            force_field = data.get('force_field', 'gaff2')
             
-            ligand_mol2 = OUTPUT_DIR / f"4_ligands_corrected_{ligand_num}.mol2"
-            ligand_frcmod = OUTPUT_DIR / f"4_ligands_corrected_{ligand_num}.frcmod"
+            # Determine the s parameter based on force field
+            s_param = 2 if force_field == 'gaff2' else 1
             
-            print(f"\n{'='*60}")
-            print(f"Processing ligand {ligand_num}: {ligand_pdb.name}")
-            print(f"{'='*60}")
+            yield _format_log(f"Working directory: {os.getcwd()}")
+            yield _format_log(f"Output directory: {OUTPUT_DIR}")
             
-            # Step 1: Calculate net charge using awk
-            print(f"Step 1: Calculating net charge for ligand {ligand_num}...")
-            awk_cmd = "awk '/^HETATM/ {if($NF ~ /[A-Z][0-9]-$/) charge--; if($NF ~ /[A-Z][0-9]\\+$/) charge++} END {print \"Net charge:\", charge+0}'"
-            cmd1 = f"{awk_cmd} {ligand_pdb}"
+            # Find all individual ligand files (4_ligands_corrected_1.pdb, 4_ligands_corrected_2.pdb, etc.)
+            # Exclude OpenBabel output files (4_ligands_corrected_obabel_*.pdb)
+            ligand_files = sorted([f for f in OUTPUT_DIR.glob("4_ligands_corrected_*.pdb") if "_obabel_" not in f.name])
             
-            try:
-                result = subprocess.run(cmd1, shell=True, capture_output=True, text=True)
-                output = result.stdout.strip()
-                print(f"Awk output: '{output}'")
-                
-                net_charge_match = re.search(r'Net charge:\s*(-?\d+)', output)
-                if net_charge_match:
-                    net_charge = int(net_charge_match.group(1))
-                    print(f"Calculated net charge: {net_charge}")
+            if not ligand_files:
+                # Fallback: check for single ligand file (backward compatibility)
+                single_ligand_pdb = OUTPUT_DIR / "4_ligands_corrected.pdb"
+                if single_ligand_pdb.exists():
+                    ligand_files = [single_ligand_pdb]
                 else:
-                    print("Could not extract net charge from awk output, using 0")
+                    yield _format_log('Ligand PDB file(s) not found. Please prepare structure with ligands first.', 'error')
+                    yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': 'Ligand PDB file(s) not found. Please prepare structure with ligands first.'})}\n\n"
+                    return
+            
+            yield _format_log(f"Found {len(ligand_files)} ligand file(s) to process")
+            
+            import re
+            processed_ligands = []
+            errors = []
+            
+            # Step 1: Extract residue names and group ligands by residue name
+            ligand_by_resname = {}  # Maps residue name to list of (ligand_pdb, ligand_num) tuples
+            resname_to_ligand_num = {}  # Maps residue name to the ligand_num we'll use for processing
+            
+            for i, ligand_pdb in enumerate(ligand_files, 1):
+                ligand_num = i
+                # Extract number from filename if available (e.g., 4_ligands_corrected_1.pdb -> 1)
+                match = re.search(r'_(\d+)\.pdb$', ligand_pdb.name)
+                if match:
+                    ligand_num = int(match.group(1))
+                
+                # Extract residue name from this ligand file
+                resname = get_residue_name_from_pdb(ligand_pdb)
+                if not resname:
+                    yield _format_log(f"Warning: Could not extract residue name from {ligand_pdb.name}, using LIG{ligand_num}", 'warning')
+                    resname = f"LIG{ligand_num}"
+                
+                # Group by residue name
+                if resname not in ligand_by_resname:
+                    ligand_by_resname[resname] = []
+                    resname_to_ligand_num[resname] = ligand_num  # Use first occurrence's number
+                ligand_by_resname[resname].append((ligand_pdb, ligand_num))
+            
+            yield _format_log(f"Found {len(ligand_by_resname)} unique ligand residue name(s): {', '.join(sorted(ligand_by_resname.keys()))}")
+            
+            # Step 2: Process each unique residue name only once
+            for resname, ligand_list in ligand_by_resname.items():
+                # Use the first ligand file for this residue name
+                ligand_pdb, ligand_num = ligand_list[0]
+                
+                # If there are multiple occurrences, log it
+                if len(ligand_list) > 1:
+                    other_nums = [num for _, num in ligand_list[1:]]
+                    yield _format_log(f"Residue {resname} appears {len(ligand_list)} times (ligand files: {ligand_num}, {', '.join(map(str, other_nums))})", 'info')
+                    yield _format_log(f"Processing {resname} once using ligand file {ligand_num}, skipping duplicates", 'info')
+                
+                # Use residue name for output files to avoid conflicts
+                ligand_mol2 = OUTPUT_DIR / f"{resname}.mol2"
+                ligand_frcmod = OUTPUT_DIR / f"{resname}.frcmod"
+                
+                yield _format_log(f"\n{'='*60}")
+                yield _format_log(f"Processing ligand {resname} (from file {ligand_pdb.name})")
+                yield _format_log(f"{'='*60}")
+                
+                # Step 1: Calculate net charge using awk
+                yield _format_log(f"Step 1: Calculating net charge for ligand {resname}...")
+                awk_cmd = "awk '/^HETATM/ {if($NF ~ /[A-Z][0-9]-$/) charge--; if($NF ~ /[A-Z][0-9]\\+$/) charge++} END {print \"Net charge:\", charge+0}'"
+                cmd1 = f"{awk_cmd} {ligand_pdb}"
+                
+                try:
+                    result = subprocess.run(cmd1, shell=True, capture_output=True, text=True)
+                    output = result.stdout.strip()
+                    yield _format_log(f"Awk output: '{output}'")
+                    
+                    net_charge_match = re.search(r'Net charge:\s*(-?\d+)', output)
+                    if net_charge_match:
+                        net_charge = int(net_charge_match.group(1))
+                        yield _format_log(f"Calculated net charge: {net_charge}")
+                    else:
+                        yield _format_log("Could not extract net charge from awk output, using 0", 'warning')
+                        net_charge = 0
+                except Exception as e:
+                    yield _format_log(f"Error running awk command: {e}, using net charge 0", 'error')
                     net_charge = 0
-            except Exception as e:
-                print(f"Error running awk command: {e}, using net charge 0")
-                net_charge = 0
+                
+                # Step 2: Run antechamber with streaming output
+                yield _format_log(f"Step 2: Running antechamber for ligand {resname} with net charge {net_charge}...")
+                cmd2 = f"antechamber -i {ligand_pdb.name} -fi pdb -o {ligand_mol2.name} -fo mol2 -c bcc -at {force_field} -nc {net_charge}"
+                yield _format_log(f"Running command: {cmd2}")
+                
+                # Stream antechamber output in real-time
+                process = subprocess.Popen(cmd2, shell=True, cwd=str(OUTPUT_DIR), 
+                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                                         text=True, bufsize=1, universal_newlines=True)
+                
+                for line in iter(process.stdout.readline, ''):
+                    if line:
+                        yield _format_log(line.strip())
+                
+                process.wait()
+                return_code = process.returncode
+                
+                yield _format_log(f"antechamber return code: {return_code}")
+                
+                if return_code != 0:
+                    error_msg = f'antechamber failed for ligand {resname} with net charge {net_charge}'
+                    yield _format_log(f"ERROR: {error_msg}", 'error')
+                    errors.append(error_msg)
+                    continue
+                
+                # Step 3: Run parmchk2 with streaming output
+                yield _format_log(f"Step 3: Running parmchk2 for ligand {resname}...")
+                cmd3 = f"parmchk2 -i {ligand_mol2.name} -f mol2 -o {ligand_frcmod.name} -a Y -s {s_param}"
+                yield _format_log(f"Running command: {cmd3}")
+                
+                # Stream parmchk2 output in real-time
+                process = subprocess.Popen(cmd3, shell=True, cwd=str(OUTPUT_DIR), 
+                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                                         text=True, bufsize=1, universal_newlines=True)
+                
+                for line in iter(process.stdout.readline, ''):
+                    if line:
+                        yield _format_log(line.strip())
+                
+                process.wait()
+                return_code = process.returncode
+                
+                yield _format_log(f"parmchk2 return code: {return_code}")
+                
+                if return_code != 0:
+                    error_msg = f'parmchk2 failed for ligand {resname}'
+                    yield _format_log(f"ERROR: {error_msg}", 'error')
+                    errors.append(error_msg)
+                    continue
+                
+                # Check if files were generated successfully
+                if ligand_mol2.exists() and ligand_frcmod.exists():
+                    processed_ligands.append({
+                        'resname': resname,
+                        'ligand_num': ligand_num,
+                        'net_charge': net_charge,
+                        'files': {
+                            'pdb': str(ligand_pdb),
+                            'mol2': str(ligand_mol2),
+                            'frcmod': str(ligand_frcmod)
+                        },
+                        'duplicate_files': [str(pdb) for pdb, num in ligand_list[1:]] if len(ligand_list) > 1 else []
+                    })
+                    yield _format_log(f"✅ Successfully processed ligand {resname}", 'success')
+                else:
+                    error_msg = f'Force field generation failed for ligand {resname} - output files not created'
+                    yield _format_log(f"ERROR: {error_msg}", 'error')
+                    errors.append(error_msg)
             
-            # Step 2: Run antechamber
-            print(f"Step 2: Running antechamber for ligand {ligand_num} with net charge {net_charge}...")
-            cmd2 = f"antechamber -i 4_ligands_corrected_{ligand_num}.pdb -fi pdb -o 4_ligands_corrected_{ligand_num}.mol2 -fo mol2 -c bcc -at {force_field} -nc {net_charge}"
-            print(f"Running command: {cmd2}")
-            result2 = subprocess.run(cmd2, shell=True, cwd=str(OUTPUT_DIR), capture_output=True, text=True)
+            if not processed_ligands:
+                error_msg = f'Failed to process any ligands. Errors: {"; ".join(errors)}'
+                yield _format_log(error_msg, 'error')
+                yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': error_msg})}\n\n"
+                return
             
-            print(f"antechamber return code: {result2.returncode}")
-            if result2.stdout:
-                print(f"antechamber stdout: {result2.stdout[:500]}...")  # Truncate long output
-            if result2.stderr:
-                print(f"antechamber stderr: {result2.stderr[:500]}...")
+            # Send final result
+            result_data = {
+                'type': 'complete',
+                'success': True,
+                'message': f'Successfully processed {len(processed_ligands)} ligand(s) with force field {force_field}',
+                'ligands': processed_ligands,
+                'errors': errors if errors else None
+            }
+            yield f"data: {json.dumps(result_data)}\n\n"
             
-            if result2.returncode != 0:
-                error_msg = f'antechamber failed for ligand {ligand_num} with net charge {net_charge}. Error: {result2.stderr[:200]}'
-                print(f"ERROR: {error_msg}")
-                errors.append(error_msg)
-                continue
-            
-            # Step 3: Run parmchk2
-            print(f"Step 3: Running parmchk2 for ligand {ligand_num}...")
-            cmd3 = f"parmchk2 -i 4_ligands_corrected_{ligand_num}.mol2 -f mol2 -o 4_ligands_corrected_{ligand_num}.frcmod -a Y -s {s_param}"
-            print(f"Running command: {cmd3}")
-            result3 = subprocess.run(cmd3, shell=True, cwd=str(OUTPUT_DIR), capture_output=True, text=True)
-            
-            print(f"parmchk2 return code: {result3.returncode}")
-            if result3.stdout:
-                print(f"parmchk2 stdout: {result3.stdout[:500]}...")
-            if result3.stderr:
-                print(f"parmchk2 stderr: {result3.stderr[:500]}...")
-            
-            if result3.returncode != 0:
-                error_msg = f'parmchk2 failed for ligand {ligand_num}. Error: {result3.stderr[:200]}'
-                print(f"ERROR: {error_msg}")
-                errors.append(error_msg)
-                continue
-            
-            # Check if files were generated successfully
-            if ligand_mol2.exists() and ligand_frcmod.exists():
-                processed_ligands.append({
-                    'ligand_num': ligand_num,
-                    'net_charge': net_charge,
-                    'files': {
-                        'pdb': str(ligand_pdb),
-                        'mol2': str(ligand_mol2),
-                        'frcmod': str(ligand_frcmod)
-                    }
-                })
-                print(f"✅ Successfully processed ligand {ligand_num}")
-            else:
-                error_msg = f'Force field generation failed for ligand {ligand_num} - output files not created'
-                print(f"ERROR: {error_msg}")
-                errors.append(error_msg)
-        
-        if not processed_ligands:
-            return jsonify({
-                'error': f'Failed to process any ligands. Errors: {"; ".join(errors)}'
-            }), 500
-        
-        return jsonify({
-            'success': True,
-            'message': f'Successfully processed {len(processed_ligands)} ligand(s) with force field {force_field}',
-            'ligands': processed_ligands,
-            'errors': errors if errors else None
-        })
-        
-    except Exception as e:
-        logger.error(f"Error generating ligand force field: {str(e)}")
-        return jsonify({'error': f'Internal server error: {str(e)}'}), 500
+        except Exception as e:
+            logger.error(f"Error generating ligand force field: {str(e)}")
+            yield _format_log(f'Internal server error: {str(e)}', 'error')
+            yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': f'Internal server error: {str(e)}'})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/api/calculate-net-charge', methods=['POST'])
 def calculate_net_charge():
@@ -1357,24 +1418,57 @@ def calculate_net_charge():
         if not tleap_ready_file.exists():
             return jsonify({'error': 'Structure not prepared. Please prepare structure first.'}), 400
         
-        # Check if ligands are present (support multiple ligands)
-        ligand_mol2_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.mol2"))
-        ligand_frcmod_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.frcmod"))
+        # Check if ligands are present - look for residue-named files first, then fallback to numbered files
+        ligand_mol2_files = []
+        ligand_frcmod_files = []
+        ligand_resname_map = {}  # Maps residue name to (mol2_file, frcmod_file)
         
-        # Fallback: check for single ligand file (backward compatibility)
+        # First, try to find residue-named files (e.g., O9C.mol2, O9C.frcmod)
+        unique_resnames = get_all_ligand_residue_names()
+        for resname in unique_resnames:
+            mol2_file = OUTPUT_DIR / f"{resname}.mol2"
+            frcmod_file = OUTPUT_DIR / f"{resname}.frcmod"
+            if mol2_file.exists() and frcmod_file.exists():
+                ligand_resname_map[resname] = (mol2_file, frcmod_file)
+                ligand_mol2_files.append(mol2_file)
+                ligand_frcmod_files.append(frcmod_file)
+        
+        # Fallback: check for numbered files (backward compatibility)
+        if not ligand_mol2_files:
+            numbered_mol2 = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.mol2"))
+            numbered_frcmod = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.frcmod"))
+            if numbered_mol2 and numbered_frcmod:
+                ligand_mol2_files = numbered_mol2
+                ligand_frcmod_files = numbered_frcmod
+                # Try to map to residue names
+                resnames = get_all_ligand_residue_names()
+                for i, (mol2_file, frcmod_file) in enumerate(zip(ligand_mol2_files, ligand_frcmod_files)):
+                    # Extract residue name from mol2 file if possible
+                    resname = get_residue_name_from_mol2(mol2_file) if mol2_file.exists() else None
+                    if not resname:
+                        # Try to get from tleap_ready.pdb
+                        if resnames and i < len(resnames):
+                            resname = resnames[i]
+                        else:
+                            resname = f"LIG{len(ligand_resname_map) + 1}"
+                    # Only add if not already in map (avoid duplicates)
+                    if resname not in ligand_resname_map:
+                        ligand_resname_map[resname] = (mol2_file, frcmod_file)
+        
+        # Final fallback: single ligand file (backward compatibility)
         if not ligand_mol2_files:
             single_mol2 = OUTPUT_DIR / "4_ligands_corrected.mol2"
             single_frcmod = OUTPUT_DIR / "4_ligands_corrected.frcmod"
             if single_mol2.exists() and single_frcmod.exists():
                 ligand_mol2_files = [single_mol2]
                 ligand_frcmod_files = [single_frcmod]
+                resname = get_all_ligand_residue_names()
+                if resname:
+                    ligand_resname_map[resname[0]] = (single_mol2, single_frcmod)
+                else:
+                    ligand_resname_map["LIG"] = (single_mol2, single_frcmod)
         
         ligand_present = len(ligand_mol2_files) > 0 and len(ligand_frcmod_files) > 0
-        
-        # Get ligand residue names
-        ligand_names = get_all_ligand_residue_names()
-        while len(ligand_names) < len(ligand_mol2_files):
-            ligand_names.append(f"LIG{len(ligand_names) + 1}")
         
         # Create dynamic tleap input file
         tleap_input = OUTPUT_DIR / "calc_charge_on_system.in"
@@ -1388,13 +1482,12 @@ def calculate_net_charge():
             f.write("source leaprc.gaff2\n\n")
             
             if ligand_present:
-                # Load all ligand parameters and structures
-                for frcmod_file in ligand_frcmod_files:
+                # Load each unique ligand parameter and structure only once
+                # Use sorted to ensure consistent ordering
+                for resname in sorted(ligand_resname_map.keys()):
+                    mol2_file, frcmod_file = ligand_resname_map[resname]
                     f.write(f"loadamberparams {frcmod_file.name}\n")
-                f.write("\n")
-                
-                for mol2_file, lig_name in zip(ligand_mol2_files, ligand_names):
-                    f.write(f"{lig_name} = loadmol2 {mol2_file.name}\n")
+                    f.write(f"{resname} = loadmol2 {mol2_file.name}\n")
                 f.write("\n")
             
             f.write("x = loadpdb tleap_ready.pdb\n\n")
@@ -1924,10 +2017,31 @@ def get_generated_files():
             'mdin_prod.in',
             'submit_job.pbs'
         ]
+        # Files to exclude from preview (intermediate/utility files)
+        excluded_files = [
+            'calc_charge_on_system.in',
+            'generate_ff_parameters.in',
+            'sqm.in'
+        ]
         # Note: Force field parameter files (protein.prmtop, protein.inpcrd, protein_solvated.pdb) 
         # are excluded from preview as they are binary/large files
+        
+        # Also include any user-created .in files in the output directory
+        user_created_files = []
+        try:
+            for file_path in OUTPUT_DIR.glob("*.in"):
+                filename = file_path.name
+                # Exclude standard files and utility files
+                if filename not in files_to_read and filename not in excluded_files:
+                    user_created_files.append(filename)
+        except Exception as e:
+            logger.warning(f"Error scanning for user-created files: {e}")
+        
+        # Combine standard files and user-created files
+        all_files = files_to_read + sorted(user_created_files)
+        
         result = {}
-        for name in files_to_read:
+        for name in all_files:
             path = OUTPUT_DIR / name
             if path.exists():
                 try:
@@ -1942,6 +2056,91 @@ def get_generated_files():
         logger.error(f"Error reading generated files: {str(e)}")
         return jsonify({'error': f'Failed to read files: {str(e)}'}), 500
 
+@app.route('/api/save-file', methods=['POST'])
+def save_file():
+    """Save edited file content back to the output directory"""
+    try:
+        data = request.get_json()
+        filename = data.get('filename')
+        content = data.get('content')
+        
+        if not filename:
+            return jsonify({'success': False, 'error': 'Filename is required'}), 400
+        
+        if content is None:
+            return jsonify({'success': False, 'error': 'Content is required'}), 400
+        
+        # Security: Only allow saving files that are in the allowed list
+        allowed_files = [
+            'min_restrained.in',
+            'min.in',
+            'HeatNPT.in',
+            'mdin_equi.in',
+            'mdin_prod.in',
+            'submit_job.pbs'
+        ]
+        
+        if filename not in allowed_files:
+            return jsonify({'success': False, 'error': f'File "{filename}" is not allowed to be edited'}), 403
+        
+        # Prevent directory traversal attacks
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return jsonify({'success': False, 'error': 'Invalid filename'}), 400
+        
+        # Write file
+        file_path = OUTPUT_DIR / filename
+        try:
+            with open(file_path, 'w') as f:
+                f.write(content)
+            
+            logger.info(f"File {filename} saved successfully")
+            return jsonify({'success': True, 'message': f'File {filename} saved successfully'})
+        except Exception as e:
+            logger.error(f"Error writing file {filename}: {str(e)}")
+            return jsonify({'success': False, 'error': f'Failed to write file: {str(e)}'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error saving file: {str(e)}")
+        return jsonify({'success': False, 'error': f'Internal server error: {str(e)}'}), 500
+
+@app.route('/api/save-new-file', methods=['POST'])
+def save_new_file():
+    """Save a new simulation file created by the user"""
+    try:
+        data = request.get_json()
+        filename = data.get('filename')
+        content = data.get('content')
+        
+        if not filename:
+            return jsonify({'success': False, 'error': 'Filename is required'}), 400
+        
+        if content is None:
+            return jsonify({'success': False, 'error': 'Content is required'}), 400
+        
+        # Validate filename - must end with .in
+        if not filename.endswith('.in'):
+            return jsonify({'success': False, 'error': 'File name must end with .in extension'}), 400
+        
+        # Prevent directory traversal attacks
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return jsonify({'success': False, 'error': 'Invalid filename'}), 400
+        
+        # Write file
+        file_path = OUTPUT_DIR / filename
+        try:
+            with open(file_path, 'w') as f:
+                f.write(content)
+            
+            logger.info(f"New file {filename} saved successfully")
+            return jsonify({'success': True, 'message': f'File {filename} saved successfully'})
+        except Exception as e:
+            logger.error(f"Error writing new file {filename}: {str(e)}")
+            return jsonify({'success': False, 'error': f'Failed to write file: {str(e)}'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error saving new file: {str(e)}")
+        return jsonify({'success': False, 'error': f'Internal server error: {str(e)}'}), 500
+
 def get_ligand_residue_name():
     """Extract first ligand residue name from tleap_ready.pdb (for backward compatibility)"""
     ligand_names = get_all_ligand_residue_names()
@@ -1952,28 +2151,57 @@ def generate_ff_parameters_file(force_field, water_model, add_ions, distance):
     # Debug logging
     print(f"DEBUG: force_field={force_field}, water_model={water_model}, add_ions={add_ions}, distance={distance}")
     
-    # Find all ligand mol2 files (support multiple ligands)
-    ligand_mol2_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.mol2"))
-    ligand_frcmod_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.frcmod"))
+    # Check if ligands are present - look for residue-named files first, then fallback to numbered files
+    ligand_mol2_files = []
+    ligand_frcmod_files = []
+    ligand_resname_map = {}  # Maps residue name to (mol2_file, frcmod_file)
     
-    # Fallback: check for single ligand file (backward compatibility)
+    # First, try to find residue-named files (e.g., O9C.mol2, O9C.frcmod)
+    unique_resnames = get_all_ligand_residue_names()
+    for resname in unique_resnames:
+        mol2_file = OUTPUT_DIR / f"{resname}.mol2"
+        frcmod_file = OUTPUT_DIR / f"{resname}.frcmod"
+        if mol2_file.exists() and frcmod_file.exists():
+            ligand_resname_map[resname] = (mol2_file, frcmod_file)
+            ligand_mol2_files.append(mol2_file)
+            ligand_frcmod_files.append(frcmod_file)
+    
+    # Fallback: check for numbered files (backward compatibility)
+    if not ligand_mol2_files:
+        numbered_mol2 = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.mol2"))
+        numbered_frcmod = sorted(OUTPUT_DIR.glob("4_ligands_corrected_*.frcmod"))
+        if numbered_mol2 and numbered_frcmod:
+            ligand_mol2_files = numbered_mol2
+            ligand_frcmod_files = numbered_frcmod
+            # Try to map to residue names
+            resnames = get_all_ligand_residue_names()
+            for i, (mol2_file, frcmod_file) in enumerate(zip(ligand_mol2_files, ligand_frcmod_files)):
+                # Extract residue name from mol2 file if possible
+                resname = get_residue_name_from_mol2(mol2_file) if mol2_file.exists() else None
+                if not resname:
+                    # Try to get from tleap_ready.pdb
+                    if resnames and i < len(resnames):
+                        resname = resnames[i]
+                    else:
+                        resname = f"LIG{len(ligand_resname_map) + 1}"
+                # Only add if not already in map (avoid duplicates)
+                if resname not in ligand_resname_map:
+                    ligand_resname_map[resname] = (mol2_file, frcmod_file)
+    
+    # Final fallback: single ligand file (backward compatibility)
     if not ligand_mol2_files:
         single_mol2 = OUTPUT_DIR / "4_ligands_corrected.mol2"
         single_frcmod = OUTPUT_DIR / "4_ligands_corrected.frcmod"
         if single_mol2.exists() and single_frcmod.exists():
             ligand_mol2_files = [single_mol2]
             ligand_frcmod_files = [single_frcmod]
+            resnames = get_all_ligand_residue_names()
+            if resnames:
+                ligand_resname_map[resnames[0]] = (single_mol2, single_frcmod)
+            else:
+                ligand_resname_map["LIG"] = (single_mol2, single_frcmod)
     
     ligand_present = len(ligand_mol2_files) > 0 and len(ligand_frcmod_files) > 0
-    
-    # Get dynamic ligand residue names
-    ligand_names = []
-    if ligand_present:
-        # Extract ligand residue names from tleap_ready.pdb
-        ligand_names = get_all_ligand_residue_names()
-        # If we have more ligands than names, generate default names
-        while len(ligand_names) < len(ligand_mol2_files):
-            ligand_names.append(f"LIG{len(ligand_names) + 1}")
     
     # Build the content dynamically
     content = f"source leaprc.protein.{force_field}\n"
@@ -1989,14 +2217,12 @@ def generate_ff_parameters_file(force_field, water_model, add_ions, distance):
     if ligand_present:
         content += "source leaprc.gaff2\n\n"
         
-        # Load all frcmod files
-        for i, frcmod_file in enumerate(ligand_frcmod_files, 1):
+        # Load each unique ligand parameter and structure only once
+        # Use sorted to ensure consistent ordering
+        for resname in sorted(ligand_resname_map.keys()):
+            mol2_file, frcmod_file = ligand_resname_map[resname]
             content += f"loadamberparams {frcmod_file.name}\n"
-        content += "\n"
-        
-        # Load all mol2 files with unique variable names
-        for i, (mol2_file, lig_name) in enumerate(zip(ligand_mol2_files, ligand_names), 1):
-            content += f"{lig_name} = loadmol2 {mol2_file.name}\n"
+            content += f"{resname} = loadmol2 {mol2_file.name}\n"
         content += "\n"
     else:
         content += "\n"
@@ -2028,6 +2254,42 @@ def generate_ff_parameters_file(force_field, water_model, add_ions, distance):
     # Write the file
     with open(OUTPUT_DIR / "generate_ff_parameters.in", 'w') as f:
         f.write(content)
+
+def get_residue_name_from_pdb(pdb_file):
+    """Extract residue name from a ligand PDB file"""
+    try:
+        with open(pdb_file, 'r') as f:
+            for line in f:
+                if line.startswith(('ATOM', 'HETATM')):
+                    # Extract residue name (columns 18-20)
+                    residue_name = line[17:20].strip()
+                    if residue_name and residue_name not in ['HOH', 'WAT', 'TIP', 'SPC', 'NA', 'CL']:
+                        return residue_name
+        return None
+    except Exception as e:
+        logger.warning(f"Could not extract residue name from {pdb_file}: {e}")
+        return None
+
+def get_residue_name_from_mol2(mol2_file):
+    """Extract residue name from a mol2 file (from @<TRIPOS>MOLECULE section)"""
+    try:
+        with open(mol2_file, 'r') as f:
+            lines = f.readlines()
+            # Find @<TRIPOS>MOLECULE section
+            in_molecule = False
+            for i, line in enumerate(lines):
+                if '@<TRIPOS>MOLECULE' in line:
+                    in_molecule = True
+                    # The next line is the molecule name/residue name
+                    if i + 1 < len(lines):
+                        resname = lines[i + 1].strip()
+                        # Remove any extra whitespace or comments
+                        resname = resname.split()[0] if resname.split() else resname
+                        return resname
+        return None
+    except Exception as e:
+        logger.warning(f"Could not extract residue name from {mol2_file}: {e}")
+        return None
 
 def get_all_ligand_residue_names():
     """Extract all unique ligand residue names from tleap_ready.pdb"""

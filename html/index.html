@@ -317,7 +317,7 @@
                             <div class="prep-options">
                                 <div class="prep-option">
                                     <label class="checkbox-container">
-                                        <input type="checkbox" id="remove-water" checked>
+                                        <input type="checkbox" id="remove-water" checked disabled>
                                         <span class="checkmark"></span>
                                         Remove water molecules
                                     </label>
@@ -326,7 +326,7 @@
                                 
                                 <div class="prep-option">
                                     <label class="checkbox-container">
-                                        <input type="checkbox" id="remove-ions" checked>
+                                        <input type="checkbox" id="remove-ions" checked disabled>
                                         <span class="checkmark"></span>
                                         Remove ions
                                     </label>
@@ -335,7 +335,7 @@
                                 
                                 <div class="prep-option">
                                     <label class="checkbox-container">
-                                        <input type="checkbox" id="remove-hydrogens" checked>
+                                        <input type="checkbox" id="remove-hydrogens" checked disabled>
                                         <span class="checkmark"></span>
                                         Remove hydrogen atoms
                                     </label>
@@ -589,7 +589,7 @@
                             <div class="step-header">
                                 <h3><i class="fas fa-lock"></i> Restrained Minimization</h3>
                                 <label class="switch">
-                                    <input type="checkbox" id="enable-restrained-min" checked>
+                                    <input type="checkbox" id="enable-restrained-min" checked disabled>
                                     <span class="slider"></span>
                                 </label>
                             </div>
@@ -611,7 +611,7 @@
                             <div class="step-header">
                                 <h3><i class="fas fa-compress"></i> Minimization</h3>
                                 <label class="switch">
-                                    <input type="checkbox" id="enable-minimization" checked>
+                                    <input type="checkbox" id="enable-minimization" checked disabled>
                                     <span class="slider"></span>
                                 </label>
                             </div>
@@ -635,7 +635,7 @@
                             <div class="step-header">
                                 <h3><i class="fas fa-fire"></i> NPT Heating</h3>
                                 <label class="switch">
-                                    <input type="checkbox" id="enable-nvt" checked>
+                                    <input type="checkbox" id="enable-nvt" checked disabled>
                                     <span class="slider"></span>
                                 </label>
                             </div>
@@ -657,7 +657,7 @@
                             <div class="step-header">
                                 <h3><i class="fas fa-compress-arrows-alt"></i> NPT Equilibration</h3>
                                 <label class="switch">
-                                    <input type="checkbox" id="enable-npt" checked>
+                                    <input type="checkbox" id="enable-npt" checked disabled>
                                     <span class="slider"></span>
                                 </label>
                             </div>
@@ -683,7 +683,7 @@
                             <div class="step-header">
                                 <h3><i class="fas fa-play"></i> Production Run(NPT)</h3>
                                 <label class="switch">
-                                    <input type="checkbox" id="enable-production" checked>
+                                    <input type="checkbox" id="enable-production" checked disabled>
                                     <span class="slider"></span>
                                 </label>
                             </div>
@@ -737,7 +737,12 @@
                     </div>
 
                     <div class="files-preview" id="files-preview" style="display: none;">
-                        <h3><i class="fas fa-files"></i> Generated Files</h3>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <h3 style="margin: 0;"><i class="fas fa-files"></i> Generated Files</h3>
+                            <button class="btn btn-primary" id="add-simulation-file" style="margin-left: 10px;">
+                                <i class="fas fa-plus"></i> Add Simulation File
+                            </button>
+                        </div>
                         <div class="files-list" id="files-list">
                             <!-- Generated files will be listed here -->
                         </div>

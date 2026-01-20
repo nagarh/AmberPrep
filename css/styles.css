@@ -1378,3 +1378,304 @@ input:checked + .slider:before {
     margin-top: 0.5rem;
     font-style: italic;
 }
+
+/* Log Modal Styles */
+.log-modal {
+    display: none;
+    position: fixed;
+    z-index: 10000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.log-modal-content {
+    background-color: #fefefe;
+    margin: 2% auto;
+    padding: 0;
+    border: 1px solid #888;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 900px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    animation: slideDown 0.3s;
+}
+
+@keyframes slideDown {
+    from {
+        transform: translateY(-50px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.log-modal-header {
+    background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+    color: white;
+    padding: 1rem 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-radius: 8px 8px 0 0;
+}
+
+.log-modal-header h3 {
+    margin: 0;
+    font-size: 1.3rem;
+    font-weight: 500;
+}
+
+.log-modal-close {
+    color: white;
+    font-size: 2rem;
+    font-weight: bold;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: background-color 0.2s;
+}
+
+.log-modal-close:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.log-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+    background-color: #1e1e1e;
+    color: #d4d4d4;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    max-height: calc(90vh - 80px);
+}
+
+.log-content {
+    min-height: 100%;
+}
+
+.log-line {
+    padding: 0.3rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    word-wrap: break-word;
+}
+
+.log-line:last-child {
+    border-bottom: none;
+}
+
+.log-time {
+    color: #858585;
+    margin-right: 0.5rem;
+}
+
+.log-icon {
+    margin-right: 0.5rem;
+}
+
+.log-message {
+    color: #d4d4d4;
+}
+
+.log-info .log-message {
+    color: #d4d4d4;
+}
+
+.log-success .log-message {
+    color: #4ec9b0;
+}
+
+.log-warning .log-message {
+    color: #dcdcaa;
+}
+
+.log-error .log-message {
+    color: #f48771;
+}
+
+.log-result {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background-color: #252526;
+    border-left: 4px solid #4ec9b0;
+    border-radius: 4px;
+}
+
+.log-result h4 {
+    color: #4ec9b0;
+    margin-bottom: 0.5rem;
+}
+
+.log-result p {
+    color: #d4d4d4;
+    margin: 0.5rem 0;
+}
+
+.log-result ul {
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+    color: #d4d4d4;
+}
+
+.log-result li {
+    margin: 0.5rem 0;
+}
+
+/* File Editor Modal Styles */
+#file-content-modal {
+    animation: fadeIn 0.3s;
+}
+
+#file-content-modal > div {
+    animation: slideDown 0.3s;
+}
+
+#modal-content-edit {
+    line-height: 1.6;
+    tab-size: 4;
+    -moz-tab-size: 4;
+}
+
+#modal-content-edit:focus {
+    outline: none;
+    border-color: #0056b3;
+    box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.25);
+}
+
+#save-status {
+    font-weight: 500;
+    animation: slideUp 0.3s;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+#edit-file-btn:hover {
+    background: #0056b3 !important;
+}
+
+#save-file-btn:hover {
+    background: #218838 !important;
+}
+
+#cancel-edit-btn:hover {
+    background: #5a6268 !important;
+}
+
+/* Frozen/Disabled Checkboxes - Gray only the checkbox, keep text bold and normal */
+.checkbox-container input[type="checkbox"]:disabled {
+    opacity: 0.5 !important;
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+    -webkit-appearance: none !important;
+    appearance: none !important;
+}
+
+.checkbox-container input[type="checkbox"]:disabled + .checkmark {
+    opacity: 0.5 !important;
+}
+
+/* Keep text labels bold and normal color when checkbox is disabled */
+.checkbox-container:has(input[type="checkbox"]:disabled) {
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+    opacity: 1 !important;
+    color: #2c3e50 !important;
+    font-weight: 600 !important;
+}
+
+.checkbox-container:has(input[type="checkbox"]:disabled):hover {
+    color: #2c3e50 !important;
+}
+
+/* Prevent interaction on disabled checkbox inputs */
+.checkbox-container input[type="checkbox"]:disabled {
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+    opacity: 0.5 !important;
+}
+
+/* Gray out the checkmark for disabled checkboxes */
+.checkbox-container input[type="checkbox"]:disabled:checked {
+    background-color: #6c757d !important;
+    border-color: #6c757d !important;
+}
+
+.checkbox-container input[type="checkbox"]:disabled:checked::after {
+    color: #ffffff !important;
+}
+
+/* Frozen/Disabled Toggle Switches - Gray only the toggle, keep it hidden */
+.switch input[type="checkbox"]:disabled {
+    opacity: 0 !important; /* Keep the input completely hidden */
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+    width: 0 !important;
+    height: 0 !important;
+}
+
+.switch input[type="checkbox"]:disabled + .slider {
+    opacity: 0.5 !important;
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+    background-color: #95a5a6 !important; /* Gray color for disabled toggles */
+}
+
+.switch input[type="checkbox"]:disabled:checked + .slider {
+    background-color: #95a5a6 !important; /* Gray color even when checked */
+}
+
+.switch input[type="checkbox"]:disabled:not(:checked) + .slider {
+    background-color: #bdc3c7 !important; /* Lighter gray when unchecked */
+}
+
+.switch:has(input[type="checkbox"]:disabled) {
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+    opacity: 1 !important; /* Keep switch container visible */
+}
+
+.switch:has(input[type="checkbox"]:disabled) .slider {
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+}
+
+/* Ensure disabled switch input stays completely hidden */
+.switch input[type="checkbox"]:disabled {
+    position: absolute !important;
+    opacity: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}

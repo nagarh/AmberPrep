@@ -154,6 +154,7 @@ class MDSimulationPipeline {
         // File generation
         document.getElementById('generate-files').addEventListener('click', () => this.generateAllFiles());
         document.getElementById('preview-files').addEventListener('click', () => this.previewFiles());
+        document.getElementById('add-simulation-file').addEventListener('click', () => this.showAddFileModal());
         document.getElementById('preview-solvated').addEventListener('click', () => this.previewSolvatedProtein());
         document.getElementById('download-solvated').addEventListener('click', () => this.downloadSolvatedProtein());
         document.getElementById('download-zip').addEventListener('click', () => this.downloadZip());
@@ -751,6 +752,31 @@ class MDSimulationPipeline {
         button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
         button.disabled = true;
 
+        // Initialize log storage if not exists
+        if (!this.ligandFFLogs) {
+            this.ligandFFLogs = [];
+        }
+        this.ligandFFLogs = []; // Clear previous logs
+        this.ligandFFGenerating = true; // Flag to track if generation is in progress
+
+        // Create or get log modal
+        let logModal = document.getElementById('ligand-ff-log-modal');
+        if (!logModal) {
+            logModal = this.createLogModal();
+            document.body.appendChild(logModal);
+        }
+
+        // Show modal and render stored logs
+        const logContent = logModal.querySelector('.log-content');
+        const logContainer = logModal.querySelector('.log-container');
+        this.renderLogs(logContent);
+        logModal.style.display = 'block';
+        logContainer.scrollTop = logContainer.scrollHeight;
+
+        // Add "View Logs" button next to the generate button
+        this.addViewLogsButton(button);
+
+        // Use EventSource for SSE (but we need POST, so use fetch with streaming)
         try {
             const response = await fetch('/api/generate-ligand-ff', {
                 method: 'POST',
@@ -762,48 +788,223 @@ class MDSimulationPipeline {
                 })
             });
 
-            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
 
-            if (result.success) {
-                // Handle both single ligand (backward compatibility) and multiple ligands
-                let message = `✅ ${result.message}\n\n`;
-                
-                if (result.ligands && result.ligands.length > 0) {
-                    // Multiple ligands format
-                    result.ligands.forEach(ligand => {
-                        message += `Ligand ${ligand.ligand_num}:\n`;
-                        message += `  Net charge: ${ligand.net_charge}\n`;
-                        message += `  Files:\n`;
-                        message += `    - ${ligand.files.mol2}\n`;
-                        message += `    - ${ligand.files.frcmod}\n\n`;
-                    });
-                } else if (result.files) {
-                    // Single ligand format (backward compatibility)
-                    message += `Net charge: ${result.net_charge || 'N/A'}\n\n`;
-                    message += `Generated files:\n`;
-                    message += `- ${result.files.mol2}\n`;
-                    message += `- ${result.files.frcmod}\n`;
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep incomplete line in buffer
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            
+                            if (data.type === 'complete') {
+                                // Final result
+                                this.ligandFFGenerating = false;
+                                if (data.success) {
+                                    this.ligandFFLogs.push({ type: 'result', data: data });
+                                    this.displayFinalResult(data, logContent);
+                                } else {
+                                    this.ligandFFLogs.push({ type: 'error', message: `❌ Error: ${data.error}` });
+                                    this.addLogLine(logContent, `❌ Error: ${data.error}`, 'error');
+                                }
+                                button.innerHTML = originalText;
+                                button.disabled = false;
+                                this.removeViewLogsButton();
+                            } else {
+                                // Log message - store and display
+                                this.ligandFFLogs.push({ type: data.type || 'info', message: data.message, timestamp: new Date().toISOString() });
+                                // Only add to DOM if modal is visible
+                                const currentLogModal = document.getElementById('ligand-ff-log-modal');
+                                if (currentLogModal && currentLogModal.style.display === 'block') {
+                                    const currentLogContent = currentLogModal.querySelector('.log-content');
+                                    if (currentLogContent) {
+                                        this.addLogLine(currentLogContent, data.message, data.type || 'info');
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Error parsing SSE data:', e);
+                        }
+                    }
                 }
-                
-                if (result.errors && result.errors.length > 0) {
-                    message += `\n⚠️ Warnings:\n`;
-                    result.errors.forEach(err => {
-                        message += `- ${err}\n`;
-                    });
-                }
-                
-                alert(message);
-            } else {
-                alert(`❌ Error: ${result.error}`);
             }
         } catch (error) {
             console.error('Error generating ligand force field:', error);
-            alert(`❌ Error: Failed to generate force field parameters. ${error.message}`);
-        } finally {
-            // Restore button state
+            this.ligandFFGenerating = false;
+            const errorMsg = `❌ Error: Failed to generate force field parameters. ${error.message}`;
+            this.ligandFFLogs.push({ type: 'error', message: errorMsg });
+            this.addLogLine(logContent, errorMsg, 'error');
             button.innerHTML = originalText;
             button.disabled = false;
+            this.removeViewLogsButton();
         }
+    }
+
+    addViewLogsButton(button) {
+        // Remove existing button if any
+        this.removeViewLogsButton();
+        
+        // Create view logs button
+        const viewLogsBtn = document.createElement('button');
+        viewLogsBtn.id = 'view-ligand-ff-logs-btn';
+        viewLogsBtn.className = 'btn btn-info';
+        viewLogsBtn.style.marginLeft = '10px';
+        viewLogsBtn.innerHTML = '<i class="fas fa-terminal"></i> View Logs';
+        viewLogsBtn.onclick = () => this.showLogModal();
+        
+        // Insert after the generate button
+        button.parentNode.insertBefore(viewLogsBtn, button.nextSibling);
+    }
+
+    removeViewLogsButton() {
+        const btn = document.getElementById('view-ligand-ff-logs-btn');
+        if (btn) {
+            btn.remove();
+        }
+    }
+
+    showLogModal() {
+        let logModal = document.getElementById('ligand-ff-log-modal');
+        if (!logModal) {
+            logModal = this.createLogModal();
+            document.body.appendChild(logModal);
+        }
+
+        const logContent = logModal.querySelector('.log-content');
+        const logContainer = logModal.querySelector('.log-container');
+        
+        // Re-render all logs to ensure we have the latest
+        this.renderLogs(logContent);
+        
+        logModal.style.display = 'block';
+        // Scroll to bottom after a brief delay to ensure content is rendered
+        setTimeout(() => {
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }, 100);
+    }
+
+    renderLogs(logContent) {
+        // Store current scroll position if modal is visible
+        const logModal = document.getElementById('ligand-ff-log-modal');
+        const wasAtBottom = logModal && logModal.style.display === 'block' && 
+                           logContent.parentElement && 
+                           (logContent.parentElement.scrollTop + logContent.parentElement.clientHeight >= logContent.parentElement.scrollHeight - 10);
+        
+        logContent.innerHTML = '';
+        if (this.ligandFFLogs && this.ligandFFLogs.length > 0) {
+            this.ligandFFLogs.forEach(logEntry => {
+                if (logEntry.type === 'result') {
+                    this.displayFinalResult(logEntry.data, logContent);
+                } else {
+                    this.addLogLine(logContent, logEntry.message, logEntry.type || 'info', false);
+                }
+            });
+        }
+        
+        // Restore scroll position or scroll to bottom
+        if (logModal && logModal.style.display === 'block' && logContent.parentElement) {
+            if (wasAtBottom) {
+                logContent.parentElement.scrollTop = logContent.parentElement.scrollHeight;
+            }
+        }
+    }
+
+    createLogModal() {
+        const modal = document.createElement('div');
+        modal.id = 'ligand-ff-log-modal';
+        modal.className = 'log-modal';
+        const self = this;
+        modal.innerHTML = `
+            <div class="log-modal-content">
+                <div class="log-modal-header">
+                    <h3><i class="fas fa-cogs"></i> Generating Ligand Force Field - Live Logs</h3>
+                    <button class="log-modal-close" onclick="this.closest('.log-modal').style.display='none'">&times;</button>
+                </div>
+                <div class="log-container">
+                    <div class="log-content"></div>
+                </div>
+            </div>
+        `;
+        // Add click handler to modal background to close
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                modal.style.display = 'none';
+            }
+        });
+        return modal;
+    }
+
+    addLogLine(container, message, type = 'info', autoScroll = true) {
+        const line = document.createElement('div');
+        line.className = `log-line log-${type}`;
+        
+        const timestamp = new Date().toLocaleTimeString();
+        const icon = type === 'error' ? '❌' : type === 'success' ? '✅' : type === 'warning' ? '⚠️' : 'ℹ️';
+        
+        line.innerHTML = `<span class="log-time">[${timestamp}]</span> <span class="log-icon">${icon}</span> <span class="log-message">${this.escapeHtml(message)}</span>`;
+        container.appendChild(line);
+        
+        // Auto-scroll to bottom only if modal is visible and autoScroll is enabled
+        if (autoScroll) {
+            const logModal = document.getElementById('ligand-ff-log-modal');
+            if (logModal && logModal.style.display === 'block' && container.parentElement) {
+                // Check if user is near bottom before auto-scrolling
+                const isNearBottom = container.parentElement.scrollTop + container.parentElement.clientHeight >= 
+                                   container.parentElement.scrollHeight - 50;
+                if (isNearBottom) {
+                    container.parentElement.scrollTop = container.parentElement.scrollHeight;
+                }
+            }
+        }
+    }
+
+    displayFinalResult(data, container) {
+        const resultDiv = document.createElement('div');
+        resultDiv.className = 'log-result';
+        resultDiv.innerHTML = '<h4>📊 Final Results:</h4>';
+        
+        if (data.ligands && data.ligands.length > 0) {
+            let resultHtml = `<p><strong>✅ ${data.message}</strong></p><ul>`;
+            data.ligands.forEach(ligand => {
+                resultHtml += `<li><strong>Ligand ${ligand.ligand_num}:</strong><br>`;
+                resultHtml += `&nbsp;&nbsp;Net charge: ${ligand.net_charge}<br>`;
+                resultHtml += `&nbsp;&nbsp;Files:<br>`;
+                resultHtml += `&nbsp;&nbsp;&nbsp;&nbsp;- ${ligand.files.mol2}<br>`;
+                resultHtml += `&nbsp;&nbsp;&nbsp;&nbsp;- ${ligand.files.frcmod}</li>`;
+            });
+            resultHtml += '</ul>';
+            
+            if (data.errors && data.errors.length > 0) {
+                resultHtml += '<p><strong>⚠️ Warnings:</strong></p><ul>';
+                data.errors.forEach(err => {
+                    resultHtml += `<li>${this.escapeHtml(err)}</li>`;
+                });
+                resultHtml += '</ul>';
+            }
+            
+            resultDiv.innerHTML += resultHtml;
+        }
+        
+        container.appendChild(resultDiv);
+        container.parentElement.scrollTop = container.parentElement.scrollHeight;
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     countAtomsInPDB(pdbContent) {
@@ -1406,34 +1607,389 @@ echo "Analysis completed! Results saved in analysis/ directory"
             modal.id = 'file-content-modal';
             modal.style.cssText = `
                 position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-                background: rgba(0,0,0,0.5); z-index: 1000; display: none;
+                background: rgba(0,0,0,0.5); z-index: 1000; display: none; 
+                align-items: center; justify-content: center;
             `;
             modal.innerHTML = `
-                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-                           background: white; border-radius: 10px; padding: 20px; max-width: 80%; max-height: 80%;
-                           overflow: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <div id="modal-content-container" style="background: white; border-radius: 10px; padding: 20px; max-width: 95%; min-width: 800px; max-height: 90%;
+                           overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.3); display: flex; flex-direction: column; 
+                           opacity: 0; transition: opacity 0.2s ease-in-out;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-shrink: 0;">
                         <h3 id="modal-filename" style="margin: 0; color: #333;"></h3>
-                        <button id="close-modal" style="background: #dc3545; color: white; border: none; 
-                                border-radius: 5px; padding: 8px 15px; cursor: pointer;">Close</button>
+                        <div style="display: flex; gap: 10px;">
+                            <button id="edit-file-btn" style="background: #007bff; color: white; border: none; 
+                                    border-radius: 5px; padding: 8px 15px; cursor: pointer;">
+                                <i class="fas fa-edit"></i> Edit
+                            </button>
+                            <button id="save-file-btn" style="background: #28a745; color: white; border: none; 
+                                    border-radius: 5px; padding: 8px 15px; cursor: pointer; display: none;">
+                                <i class="fas fa-save"></i> Save
+                            </button>
+                            <button id="cancel-edit-btn" style="background: #6c757d; color: white; border: none; 
+                                    border-radius: 5px; padding: 8px 15px; cursor: pointer; display: none;">
+                                Cancel
+                            </button>
+                            <button id="close-modal" style="background: #dc3545; color: white; border: none; 
+                                    border-radius: 5px; padding: 8px 15px; cursor: pointer;">
+                                Close
+                            </button>
+                        </div>
                     </div>
-                    <pre id="modal-content" style="background: #f8f9fa; padding: 15px; border-radius: 5px; 
-                         overflow: auto; max-height: 60vh; white-space: pre-wrap; font-family: monospace;"></pre>
+                    <div style="flex: 1; overflow: auto; min-height: 0;">
+                        <pre id="modal-content" style="background: #f8f9fa; padding: 15px; border-radius: 5px; 
+                             overflow: auto; max-height: 70vh; white-space: pre-wrap; font-family: monospace; margin: 0;"></pre>
+                        <textarea id="modal-content-edit" style="width: 100%; height: 70vh; padding: 15px; border-radius: 5px; 
+                                border: 2px solid #007bff; font-family: monospace; font-size: 14px; resize: vertical; 
+                                display: none; box-sizing: border-box;"></textarea>
+                    </div>
+                    <div id="save-status" style="margin-top: 10px; padding: 10px; border-radius: 5px; display: none; flex-shrink: 0;"></div>
                 </div>
             `;
             document.body.appendChild(modal);
             
             // Close modal handlers
-            document.getElementById('close-modal').onclick = () => modal.style.display = 'none';
+            document.getElementById('close-modal').onclick = () => {
+                this.exitEditMode(modal);
+                modal.style.display = 'none';
+            };
             modal.onclick = (e) => {
-                if (e.target === modal) modal.style.display = 'none';
+                if (e.target === modal) {
+                    this.exitEditMode(modal);
+                    modal.style.display = 'none';
+                }
+            };
+            
+            // Edit button handler
+            document.getElementById('edit-file-btn').onclick = () => {
+                this.enterEditMode(modal);
+            };
+            
+            // Save button handler
+            document.getElementById('save-file-btn').onclick = () => {
+                this.saveFileContent(modal);
+            };
+            
+            // Cancel button handler
+            document.getElementById('cancel-edit-btn').onclick = () => {
+                this.exitEditMode(modal, true); // Restore original content
             };
         }
         
-        // Populate and show modal
+        // Store current filename and original content
+        modal.dataset.filename = filename;
+        modal.dataset.originalContent = content;
+        
+        // Adjust width for PBS files (they tend to be wider) BEFORE showing
+        const modalContainer = document.getElementById('modal-content-container');
+        if (filename.endsWith('.pbs')) {
+            modalContainer.style.minWidth = '1000px';
+            modalContainer.style.maxWidth = '95%';
+        } else {
+            modalContainer.style.minWidth = '800px';
+            modalContainer.style.maxWidth = '95%';
+        }
+        
+        // Populate content BEFORE showing modal to prevent visual glitch
         document.getElementById('modal-filename').textContent = filename;
         document.getElementById('modal-content').textContent = content;
+        document.getElementById('modal-content-edit').value = content;
+        
+        // Reset to view mode
+        this.exitEditMode(modal);
+        
+        // Force a reflow to ensure dimensions are calculated
+        void modalContainer.offsetHeight;
+        
+        // Show modal with flexbox centering - it will appear centered immediately
+        modal.style.display = 'flex';
+        
+        // Fade in the content container
+        requestAnimationFrame(() => {
+            modalContainer.style.opacity = '1';
+        });
+    }
+
+    enterEditMode(modal) {
+        const pre = document.getElementById('modal-content');
+        const textarea = document.getElementById('modal-content-edit');
+        const editBtn = document.getElementById('edit-file-btn');
+        const saveBtn = document.getElementById('save-file-btn');
+        const cancelBtn = document.getElementById('cancel-edit-btn');
+        
+        pre.style.display = 'none';
+        textarea.style.display = 'block';
+        editBtn.style.display = 'none';
+        saveBtn.style.display = 'inline-block';
+        cancelBtn.style.display = 'inline-block';
+        
+        // Focus textarea
+        textarea.focus();
+    }
+
+    exitEditMode(modal, restoreOriginal = false) {
+        const pre = document.getElementById('modal-content');
+        const textarea = document.getElementById('modal-content-edit');
+        const editBtn = document.getElementById('edit-file-btn');
+        const saveBtn = document.getElementById('save-file-btn');
+        const cancelBtn = document.getElementById('cancel-edit-btn');
+        
+        // Restore original content if canceling
+        if (restoreOriginal && modal.dataset.originalContent) {
+            textarea.value = modal.dataset.originalContent;
+        }
+        
+        pre.style.display = 'block';
+        textarea.style.display = 'none';
+        editBtn.style.display = 'inline-block';
+        saveBtn.style.display = 'none';
+        cancelBtn.style.display = 'none';
+        
+        // Update pre content to match textarea
+        pre.textContent = textarea.value;
+    }
+
+    async saveFileContent(modal) {
+        const filename = modal.dataset.filename;
+        const textarea = document.getElementById('modal-content-edit');
+        const content = textarea.value;
+        const statusDiv = document.getElementById('save-status');
+        
+        try {
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = '#fff3cd';
+            statusDiv.style.color = '#856404';
+            statusDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+            
+            const response = await fetch('/api/save-file', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    filename: filename,
+                    content: content
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                // Update original content
+                modal.dataset.originalContent = content;
+                
+                // Update pre content
+                document.getElementById('modal-content').textContent = content;
+                
+                // Update fileContents if it exists
+                if (this.fileContents) {
+                    this.fileContents[filename] = content;
+                }
+                
+                statusDiv.style.background = '#d4edda';
+                statusDiv.style.color = '#155724';
+                statusDiv.innerHTML = '<i class="fas fa-check-circle"></i> File saved successfully!';
+                
+                // Exit edit mode
+                this.exitEditMode(modal);
+                
+                // Hide status after 3 seconds
+                setTimeout(() => {
+                    statusDiv.style.display = 'none';
+                }, 3000);
+            } else {
+                throw new Error(result.error || 'Failed to save file');
+            }
+        } catch (error) {
+            console.error('Error saving file:', error);
+            statusDiv.style.background = '#f8d7da';
+            statusDiv.style.color = '#721c24';
+            statusDiv.innerHTML = `<i class="fas fa-exclamation-circle"></i> Error: ${error.message}`;
+        }
+    }
+
+    showAddFileModal() {
+        // Create modal if it doesn't exist
+        let modal = document.getElementById('add-file-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'add-file-modal';
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+                background: rgba(0,0,0,0.5); z-index: 1000; display: none;
+            `;
+            modal.innerHTML = `
+                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                           background: white; border-radius: 10px; padding: 20px; max-width: 90%; max-height: 90%;
+                           overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.3); display: flex; flex-direction: column;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-shrink: 0;">
+                        <h3 style="margin: 0; color: #333;"><i class="fas fa-plus-circle"></i> Add New Simulation File</h3>
+                        <button id="close-add-modal" style="background: #dc3545; color: white; border: none; 
+                                border-radius: 5px; padding: 8px 15px; cursor: pointer;">
+                            <i class="fas fa-times"></i> Close
+                        </button>
+                    </div>
+                    <div style="flex: 1; overflow: auto; min-height: 0; margin-bottom: 15px;">
+                        <div style="margin-bottom: 15px;">
+                            <label for="new-filename" style="display: block; margin-bottom: 5px; font-weight: 600; color: #333;">
+                                File Name (e.g., nvt_heating.in):
+                            </label>
+                            <input type="text" id="new-filename" placeholder="nvt_heating.in" 
+                                   style="width: 100%; padding: 10px; border: 2px solid #ddd; border-radius: 5px; font-size: 14px; box-sizing: border-box;">
+                            <small style="color: #6c757d; display: block; margin-top: 5px;">
+                                File will be saved in the output directory. Make sure to include .in extension.
+                            </small>
+                        </div>
+                        <div style="flex: 1; min-height: 300px;">
+                            <label for="new-file-content" style="display: block; margin-bottom: 5px; font-weight: 600; color: #333;">
+                                File Content:
+                            </label>
+                            <textarea id="new-file-content" placeholder="Enter file content here..." 
+                                      style="width: 100%; height: 400px; padding: 15px; border: 2px solid #007bff; 
+                                      border-radius: 5px; font-family: monospace; font-size: 14px; resize: vertical; 
+                                      box-sizing: border-box;"></textarea>
+                        </div>
+                    </div>
+                    <div id="add-file-status" style="margin-bottom: 10px; padding: 10px; border-radius: 5px; display: none; flex-shrink: 0;"></div>
+                    <div style="display: flex; gap: 10px; flex-shrink: 0;">
+                        <button id="save-new-file" style="background: #28a745; color: white; border: none; 
+                                border-radius: 5px; padding: 10px 20px; cursor: pointer; flex: 1;">
+                            <i class="fas fa-save"></i> Save File
+                        </button>
+                        <button id="cancel-add-file" style="background: #6c757d; color: white; border: none; 
+                                border-radius: 5px; padding: 10px 20px; cursor: pointer;">
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            // Close modal handlers
+            document.getElementById('close-add-modal').onclick = () => {
+                this.closeAddFileModal(modal);
+            };
+            document.getElementById('cancel-add-file').onclick = () => {
+                this.closeAddFileModal(modal);
+            };
+            modal.onclick = (e) => {
+                if (e.target === modal) {
+                    this.closeAddFileModal(modal);
+                }
+            };
+            
+            // Save button handler
+            document.getElementById('save-new-file').onclick = () => {
+                this.saveNewFile(modal);
+            };
+        }
+        
+        // Clear previous content
+        document.getElementById('new-filename').value = '';
+        document.getElementById('new-file-content').value = '';
+        document.getElementById('add-file-status').style.display = 'none';
+        
+        // Show modal
         modal.style.display = 'block';
+        document.getElementById('new-filename').focus();
+    }
+
+    closeAddFileModal(modal) {
+        modal.style.display = 'none';
+        document.getElementById('new-filename').value = '';
+        document.getElementById('new-file-content').value = '';
+        document.getElementById('add-file-status').style.display = 'none';
+    }
+
+    async saveNewFile(modal) {
+        const filename = document.getElementById('new-filename').value.trim();
+        const content = document.getElementById('new-file-content').value;
+        const statusDiv = document.getElementById('add-file-status');
+        
+        // Validation
+        if (!filename) {
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = '#f8d7da';
+            statusDiv.style.color = '#721c24';
+            statusDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> Please enter a file name.';
+            return;
+        }
+        
+        if (!content) {
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = '#fff3cd';
+            statusDiv.style.color = '#856404';
+            statusDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> File content cannot be empty.';
+            return;
+        }
+        
+        // Validate filename (must end with .in)
+        if (!filename.endsWith('.in')) {
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = '#fff3cd';
+            statusDiv.style.color = '#856404';
+            statusDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> File name must end with .in extension.';
+            return;
+        }
+        
+        // Prevent directory traversal
+        if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = '#f8d7da';
+            statusDiv.style.color = '#721c24';
+            statusDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> Invalid file name.';
+            return;
+        }
+        
+        try {
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = '#fff3cd';
+            statusDiv.style.color = '#856404';
+            statusDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving file...';
+            
+            const response = await fetch('/api/save-new-file', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    filename: filename,
+                    content: content
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                statusDiv.style.background = '#d4edda';
+                statusDiv.style.color = '#155724';
+                statusDiv.innerHTML = `
+                    <i class="fas fa-check-circle"></i> File saved successfully!<br>
+                    <small style="display: block; margin-top: 5px;">
+                        <strong>⚠️ Important:</strong> Please update the <code>submit_job.pbs</code> file to include this new simulation step.
+                    </small>
+                `;
+                
+                // Update fileContents if it exists
+                if (this.fileContents) {
+                    this.fileContents[filename] = content;
+                }
+                
+                // Refresh the files list
+                setTimeout(() => {
+                    this.previewFiles();
+                    this.closeAddFileModal(modal);
+                    // Show a persistent message
+                    alert(`✅ File "${filename}" saved successfully!\n\n⚠️ Please remember to update the submit_job.pbs file to include this new simulation step.`);
+                }, 1500);
+            } else {
+                throw new Error(result.error || 'Failed to save file');
+            }
+        } catch (error) {
+            console.error('Error saving new file:', error);
+            statusDiv.style.background = '#f8d7da';
+            statusDiv.style.color = '#721c24';
+            statusDiv.innerHTML = `<i class="fas fa-exclamation-circle"></i> Error: ${error.message}`;
+        }
     }
 
     async downloadZip() {

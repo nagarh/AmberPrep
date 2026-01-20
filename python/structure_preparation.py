@@ -704,6 +704,22 @@ def prepare_structure(pdb_content, options, output_dir="output"):
         preserve_ligands = options.get('preserve_ligands', True)
         ligand_present = False
         ligand_count = 0
+        selected_ligand_count = 0  # Store count from selected_ligands separately
+        
+        # Count selected ligands if provided (before processing)
+        if selected_ligands:
+            # Count unique ligand entities (by residue name, chain, and residue number)
+            unique_ligands = set()
+            for lig in selected_ligands:
+                resn = lig.get('resn', '')
+                chain = lig.get('chain', '')
+                resi = lig.get('resi', '')
+                # Create unique identifier
+                unique_id = f"{resn}_{chain}_{resi}"
+                unique_ligands.add(unique_id)
+            selected_ligand_count = len(unique_ligands)
+            ligand_count = selected_ligand_count  # Initialize with selected count
+            print(f"Found {selected_ligand_count} unique selected ligand(s)")
         
         if preserve_ligands:
             print("Step 3: Processing pre-extracted ligands...")
@@ -718,7 +734,10 @@ def prepare_structure(pdb_content, options, output_dir="output"):
                 
                 # Split ligands into individual files using MDAnalysis (by residue)
                 individual_ligand_files = split_ligands_by_residue(ligand_file, output_dir)
-                ligand_count = len(individual_ligand_files)
+                # Update ligand_count based on actual split results if not already set from selected_ligands
+                if not selected_ligands or len(individual_ligand_files) != ligand_count:
+                    ligand_count = len(individual_ligand_files)
+                    print(f"Split into {ligand_count} individual ligand file(s)")
                 
                 if ligand_count == 0:
                     print("Warning: No ligands could be extracted from file")
@@ -773,6 +792,12 @@ def prepare_structure(pdb_content, options, output_dir="output"):
                     # Merge protein and all ligands (with TER records between ligands)
                     if not merge_protein_and_ligand(protein_capped_file, None, tleap_ready_file, ligand_groups=all_ligand_groups):
                         raise Exception("Failed to merge protein and ligands")
+            elif selected_ligands and ligand_count > 0:
+                # If ligands were selected but file is empty, still mark as present if we have a count
+                ligand_present = True
+                print(f"Ligands were selected ({ligand_count} unique), but ligand file appears empty")
+                # Use protein only since no ligand content found
+                shutil.copy2(protein_capped_file, tleap_ready_file)
             else:
                 print("No ligands found in pre-extracted file, using protein only")
                 # Copy protein file to tleap_ready
@@ -783,11 +808,25 @@ def prepare_structure(pdb_content, options, output_dir="output"):
             # Copy protein file to tleap_ready (protein only, no ligands)
             shutil.copy2(protein_capped_file, tleap_ready_file)
         
+        # Ensure tleap_ready.pdb exists before proceeding
+        if not os.path.exists(tleap_ready_file):
+            print(f"Error: tleap_ready.pdb was not created. Checking what went wrong...")
+            # Try to create it from protein_capped_file as fallback
+            if os.path.exists(protein_capped_file):
+                print("Creating tleap_ready.pdb from protein_capped_file as fallback...")
+                shutil.copy2(protein_capped_file, tleap_ready_file)
+            else:
+                raise Exception(f"tleap_ready.pdb was not created and protein_capped_file also doesn't exist")
+        
         # Remove CONNECT records from tleap_ready.pdb (PyMOL adds them)
         print("Removing CONNECT records from tleap_ready.pdb...")
-        remove_connect_records(tleap_ready_file)
+        if not remove_connect_records(tleap_ready_file):
+            print("Warning: Failed to remove CONNECT records, but continuing...")
         
         # Read the final prepared structure
+        if not os.path.exists(tleap_ready_file):
+            raise Exception("tleap_ready.pdb does not exist after processing")
+        
         with open(tleap_ready_file, 'r') as f:
             prepared_content = f.read()
             
@@ -841,8 +880,32 @@ def prepare_structure(pdb_content, options, output_dir="output"):
                     'nme_groups': 0
                 }
             
-            # Count preserved ligands from the pre-extracted file
-            preserved_ligands = ligand_count if ligand_present and preserve_ligands else 0
+            # Count preserved ligands
+            # Priority: 1) selected_ligands count, 2) processed ligand_count, 3) 0
+            if preserve_ligands:
+                if selected_ligand_count > 0:
+                    # Use count from selected_ligands (most reliable)
+                    preserved_ligands = selected_ligand_count
+                    print(f"Using selected ligand count: {preserved_ligands}")
+                elif ligand_present and ligand_count > 0:
+                    # Use count from processing
+                    preserved_ligands = ligand_count
+                    print(f"Using processed ligand count: {preserved_ligands}")
+                elif ligand_present:
+                    # Ligands were present but count is 0, try to count from tleap_ready
+                    # Count unique ligand residue names in tleap_ready.pdb
+                    ligand_resnames = set()
+                    for line in prepared_content.split('\n'):
+                        if line.startswith('HETATM'):
+                            resname = line[17:20].strip()
+                            if resname and resname not in ['HOH', 'WAT', 'TIP', 'SPC', 'NA', 'CL', 'ACE', 'NME']:
+                                ligand_resnames.add(resname)
+                    preserved_ligands = len(ligand_resnames)
+                    print(f"Counted {preserved_ligands} unique ligand residue name(s) from tleap_ready.pdb")
+                else:
+                    preserved_ligands = 0
+            else:
+                preserved_ligands = 0
             
             result = {
                 'prepared_structure': prepared_content,
