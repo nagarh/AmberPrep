@@ -253,6 +253,7 @@ def rebuild_pdb_with_esmfold(
     chains_to_replace,
     output_pdb=None,
     original_pdb_path=None,
+    chains_use_minimized=None,
 ):
     """
     pdb_id: str
@@ -269,6 +270,12 @@ def rebuild_pdb_with_esmfold(
         Path to the original PDB file that should be loaded into PyMOL
         as the reference object named `pdb_id`. If None, defaults to
         '../../output/0_original_input.pdb'.
+
+    chains_use_minimized: list[str], optional
+        For these chains, load the superimposed minimized PDB
+        ({pdb_id}_chain_{c}_esmfold_minimized_noH.pdb) instead of the
+        ESMFold PDB. The minimized structure is aligned to the original
+        the same way as ESMFold (CA-based superimposition).
     """
 
     from pymol import cmd
@@ -308,14 +315,19 @@ def rebuild_pdb_with_esmfold(
         output_pdb = f"{pdb_id}_rebuilt.pdb"
 
     # -----------------------------
-    # 2. Align each ESMFold chain and fix chain IDs
+    # 2. Align each ESMFold (or minimized) chain and fix chain IDs
     # -----------------------------
     for chain in chains_to_replace:
         esm_obj = f"{pdb_id}_chain_{chain}_esmfold"
 
-        # Load the ESMFold-generated PDB for this chain as a PyMOL object
-        esm_pdb_filename = f"{pdb_id}_chain_{chain}_esmfold.pdb"
-        print(f"Loading ESMFold PDB {esm_pdb_filename} as object '{esm_obj}'")
+        # For minimized chains, use the superimposed minimized noH PDB
+        # (minimization writes in a different frame; we align it to original here).
+        if chains_use_minimized and chain in chains_use_minimized:
+            esm_pdb_filename = f"{pdb_id}_chain_{chain}_esmfold_minimized_noH.pdb"
+            print(f"Loading minimized PDB {esm_pdb_filename} as object '{esm_obj}' (will superimpose to original)")
+        else:
+            esm_pdb_filename = f"{pdb_id}_chain_{chain}_esmfold.pdb"
+            print(f"Loading ESMFold PDB {esm_pdb_filename} as object '{esm_obj}'")
         cmd.load(esm_pdb_filename, esm_obj)
 
         # ESMFold outputs everything as chain A by default.

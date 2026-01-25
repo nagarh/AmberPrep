@@ -36,6 +36,12 @@ When periodic boundary conditions are used, the minimum image convention is appl
                 description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
             },
             {
+                keyword: 'SCALED_COMPONENTS',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the a, b and c scaled components of the distance separately and store them as label.a, label.b and label.c. These are the projections onto the lattice vectors and are periodic with domain (-0.5,+0.5).'
+            },
+            {
                 keyword: 'NUMERICAL_DERIVATIVES',
                 required: false,
                 default: 'off',
@@ -45,19 +51,33 @@ When periodic boundary conditions are used, the minimum image convention is appl
         components: [
             {
                 name: 'x',
-                description: 'The x-component of the distance vector (only available when COMPONENTS is used)'
+                condition: 'COMPONENTS',
+                description: 'the x-component of the vector connecting the two atoms'
             },
             {
                 name: 'y',
-                description: 'The y-component of the distance vector (only available when COMPONENTS is used)'
+                condition: 'COMPONENTS',
+                description: 'the y-component of the vector connecting the two atoms'
             },
             {
                 name: 'z',
-                description: 'The z-component of the distance vector (only available when COMPONENTS is used)'
+                condition: 'COMPONENTS',
+                description: 'the z-component of the vector connecting the two atoms'
             },
             {
-                name: 'norm',
-                description: 'The norm of the distance vector (the actual distance)'
+                name: 'a',
+                condition: 'SCALED_COMPONENTS',
+                description: 'the normalized projection on the first lattice vector of the vector connecting the two atoms'
+            },
+            {
+                name: 'b',
+                condition: 'SCALED_COMPONENTS',
+                description: 'the normalized projection on the second lattice vector of the vector connecting the two atoms'
+            },
+            {
+                name: 'c',
+                condition: 'SCALED_COMPONENTS',
+                description: 'the normalized projection on the third lattice vector of the vector connecting the two atoms'
             }
         ],
         examples: [
@@ -123,32 +143,35 @@ The default switching function is RATIONAL with n=6 and m=12.`,
             {
                 keyword: 'GROUPA',
                 required: true,
-                description: 'The central atoms around which coordination is calculated. Can be a single atom, a range of atoms (e.g., 1-10), or a group defined with GROUP.'
+                description: 'First list of atoms. For more information on how to specify lists of atoms see Groups and Virtual Atoms.'
             },
             {
                 keyword: 'GROUPB',
-                required: true,
-                description: 'The atoms that coordinate to the central atoms. Can be a single atom, a range of atoms, or a group defined with GROUP.'
+                required: false,
+                description: 'Second list of atoms (if empty, N*(N-1)/2 pairs in GROUPA are counted). For more information on how to specify lists of atoms see Groups and Virtual Atoms.'
             },
             {
                 keyword: 'R_0',
                 required: true,
-                description: 'The cutoff distance for the coordination sphere. Atoms within this distance contribute to the coordination number. Units are typically Angstroms.'
+                description: 'The r_0 parameter of the switching function.'
             },
             {
                 keyword: 'D_0',
-                required: true,
-                description: 'The width of the switching function. This determines how smoothly the switching function goes from 1 to 0. Smaller values give sharper cutoffs.'
+                required: false,
+                default: '0.0',
+                description: '( default=0.0 ) The d_0 parameter of the switching function.'
             },
             {
                 keyword: 'NN',
                 required: false,
-                description: 'The exponent n in the RATIONAL switching function. Default is 6.'
+                default: '6',
+                description: '( default=6 ) The n parameter of the switching function.'
             },
             {
                 keyword: 'MM',
                 required: false,
-                description: 'The exponent m in the RATIONAL switching function. Default is 12.'
+                default: '0',
+                description: '( default=0 ) The m parameter of the switching function; 0 implies 2*NN.'
             },
             {
                 keyword: 'SWITCH',
@@ -305,12 +328,13 @@ This CV is commonly used to:
             {
                 keyword: 'ATOMS',
                 required: true,
-                description: 'The four atoms that define the torsional angle. Must be specified as a comma-separated list: atom1,atom2,atom3,atom4. The angle is measured around the bond between atom2 and atom3.'
+                description: 'the four atoms involved in the torsional angle'
             },
             {
-                keyword: 'PERIODIC',
+                keyword: 'COSINE',
                 required: false,
-                description: 'If the output of your function is periodic then you should specify the periodicity of the function. If the output is not periodic you must state this using PERIODIC=NO. For torsions, the default periodicity is from -π to π. Format: PERIODIC=<min>,<max> or PERIODIC=NO.'
+                default: 'off',
+                description: '( default=off ) calculate cosine instead of dihedral'
             },
             {
                 keyword: 'NOPBC',
@@ -405,12 +429,13 @@ RMSD is commonly used to:
             {
                 keyword: 'REFERENCE',
                 required: true,
-                description: 'The reference structure file (typically a PDB file). This structure is used as the reference for calculating RMSD.'
+                description: 'a file in pdb format containing the reference structure and the atoms involved in the CV.'
             },
             {
                 keyword: 'TYPE',
-                required: true,
-                description: 'The type of alignment to perform. Options are: OPTIMAL (full alignment using Kabsch algorithm), SIMPLE (translation only), or NOALIGN (no alignment, just calculate RMSD).'
+                required: false,
+                default: 'SIMPLE',
+                description: '( default=SIMPLE ) the manner in which RMSD alignment is performed. Should be OPTIMAL or SIMPLE.'
             },
             {
                 keyword: 'ATOMS',
@@ -661,36 +686,32 @@ target_weighted: TARGET REFERENCE=ref.pdb CVS=d1,a1,t1 WEIGHTS=1.0,2.0,1.5`
     'GYRATION': {
         name: 'GYRATION',
         category: 'Structural',
-        description: `Calculate the radius of gyration.
+        module: 'colvar',
+        description: `This is part of the colvar module
 
-The radius of gyration (Rg) is a measure of the size and compactness of a molecule. It is defined as the average distance of atoms from the center of mass, weighted by their masses.
+Calculate a property of the radius of gyration.
 
-The radius of gyration is calculated as:
-Rg = sqrt((1/M) Σᵢ mᵢ (rᵢ - r_cm)²)
+The different properties can be calculated and selected by the TYPE keyword: the Radius of Gyration (RADIUS); the Trace of the Gyration Tensor (TRACE); the Largest Principal Moment of the Gyration Tensor (GTPC_1); the middle Principal Moment of the Gyration Tensor (GTPC_2); the Smallest Principal Moment of the Gyration Tensor (GTPC_3); the Asphericity (ASPHERICITY); the Acylindricity (ACYLINDRICITY); the Relative Shape Anisotropy (KAPPA2); the Smallest Principal Radius Of Gyration (GYRATION_3); the Middle Principal Radius of Gyration (GYRATION_2); the Largest Principal Radius of Gyration (GYRATION_1).
 
-where M is the total mass, mᵢ is the mass of atom i, rᵢ is the position of atom i, and r_cm is the center of mass.
-
-For unweighted calculations (all atoms have equal weight), the formula simplifies to:
-Rg = sqrt((1/N) Σᵢ (rᵢ - r_cm)²)
-
-where N is the number of atoms.
-
-The radius of gyration is commonly used to:
-- Characterize protein folding/unfolding
-- Measure polymer chain dimensions
-- Study protein compactness
-- Monitor structural changes`,
-        syntax: 'GYRATION ATOMS=<group> [WEIGHTS=<weights>] [NOPBC] [NUMERICAL_DERIVATIVES]',
+The radius of gyration (Rg) is a measure of the size and compactness of a molecule. It is defined as the average distance of atoms from the center of mass, weighted by their masses.`,
+        syntax: 'GYRATION ATOMS=<group> [TYPE=<type>] [MASS_WEIGHTED] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
                 required: true,
-                description: 'The atoms to include in the radius of gyration calculation. Can be a range (e.g., 1-100) or a group (e.g., @protein).'
+                description: 'the group of atoms that you are calculating the Gyration Tensor for. For more information on how to specify lists of atoms see Groups and Virtual Atoms.'
             },
             {
-                keyword: 'WEIGHTS',
+                keyword: 'TYPE',
                 required: false,
-                description: 'Optional weights for each atom. If not specified, all atoms are weighted equally. Can be a comma-separated list of weights or a file containing weights.'
+                default: 'RADIUS',
+                description: '( default=RADIUS ) The type of calculation relative to the Gyration Tensor you want to perform. Options: RADIUS, TRACE, GTPC_1, GTPC_2, GTPC_3, ASPHERICITY, ACYLINDRICITY, KAPPA2, GYRATION_3, GYRATION_2, GYRATION_1.'
+            },
+            {
+                keyword: 'MASS_WEIGHTED',
+                required: false,
+                default: 'off',
+                description: '( default=off ) set the masses of all the atoms equal to one'
             },
             {
                 keyword: 'NOPBC',
@@ -861,33 +882,29 @@ PRINT ARG=ensemble FILE=colvar STRIDE=10`
         module: 'colvar',
         description: `This is part of the colvar module
 
-Calculate the alpha-beta content of a protein.
+Measures a distance including pbc between the instantaneous values of a set of torsional angles and set of reference values.
 
-This collective variable measures the fraction of residues in alpha-helix and beta-sheet conformations. It uses the DSSP algorithm or similar methods to assign secondary structure to each residue.
+This collective variable calculates the following quantity:
 
-The alpha-helix content is the fraction of residues in alpha-helical conformations (typically defined by phi and psi angles around -60° and -40°).
+s = (1/2) Σᵢ [1+cos(θᵢ - θᵢʳᵉᶠ)]
 
-The beta-sheet content is the fraction of residues in beta-sheet conformations (typically defined by phi and psi angles around -120° and 120°).
+where the θᵢ values are the instantaneous values for the torsion angles of interest and the θᵢʳᵉᶠ values are the reference values for the torsional angles. This is a measure of how similar the instantaneous and reference conformations are in terms of the dihedral angles. The sum over i runs over all the torsion angles you specify.
 
-The total secondary structure content is the sum of alpha and beta content.`,
-        syntax: 'ALPHABETA ATOMS=<group> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
+This CV is useful for:
+- Measuring similarity to reference dihedral conformations
+- Studying protein secondary structure formation
+- Biasing simulations toward specific backbone conformations`,
+        syntax: 'ALPHABETA ATOMS1=<atoms> REFERENCE1=<value> ATOMS2=<atoms> REFERENCE2=<value> ... [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
                 required: true,
-                description: 'the list of atoms to analyze. Typically the backbone atoms of the protein. For more information on how to specify lists of atoms see Groups and Virtual Atoms'
+                description: 'the atoms involved in each of the alpha-beta variables you wish to calculate. Keywords like ATOMS1, ATOMS2, ATOMS3,... should be listed and one alpha-beta value will be calculated for each ATOM keyword you specify (all ATOM keywords should specify the indices of four atoms).'
             },
             {
-                keyword: 'TYPE',
-                required: false,
-                default: 'DSSP',
-                description: '( default=DSSP ) the method used to assign secondary structure. Options are DSSP, STRIDE, or PROSS.'
-            },
-            {
-                keyword: 'NOPBC',
-                required: false,
-                default: 'off',
-                description: '( default=off ) ignore the periodic boundary conditions when calculating distances'
+                keyword: 'REFERENCE',
+                required: true,
+                description: 'the reference values for each of the torsional angles. If you use a single REFERENCE value the same reference value is used for all torsional angles. You can use multiple instances of this keyword i.e. REFERENCE1, REFERENCE2, REFERENCE3...'
             },
             {
                 keyword: 'NUMERICAL_DERIVATIVES',
@@ -896,41 +913,36 @@ The total secondary structure content is the sum of alpha and beta content.`,
                 description: '( default=off ) calculate the derivatives for these quantities numerically'
             }
         ],
-        components: [
-            {
-                name: 'alpha',
-                description: 'The fraction of residues in alpha-helical conformations'
-            },
-            {
-                name: 'beta',
-                description: 'The fraction of residues in beta-sheet conformations'
-            }
-        ],
+        components: [],
         examples: [
             {
-                title: 'Basic alpha-beta content',
-                code: `# Calculate alpha-beta content for all atoms
-ab: ALPHABETA ATOMS=1-100
+                title: 'Basic ALPHABETA calculation',
+                code: `# Calculate ALPHABETA for three torsion angles
+ab: ALPHABETA ATOMS1=168,170,172,188 REFERENCE1=-1.0 \\
+             ATOMS2=170,172,188,190 REFERENCE2=-1.0 \\
+             ATOMS3=188,190,192,230 REFERENCE3=-1.0
 
-# Print alpha and beta components
-PRINT ARG=ab.alpha,ab.beta FILE=colvar STRIDE=10`
+PRINT ARG=ab FILE=colvar STRIDE=10`
             },
             {
-                title: 'Alpha-beta for specific chain',
-                code: `# Alpha-beta for specific chain
-ab_chainA: ALPHABETA ATOMS=@chainA
+                title: 'ALPHABETA with MOLINFO',
+                code: `# Using MOLINFO shortcuts
+MOLINFO MOLTYPE=protein STRUCTURE=protein.pdb
+ab: ALPHABETA ATOMS1=@phi-3 REFERENCE=-1.22 \\
+             ATOMS2=@psi-3 \\
+             ATOMS3=@phi-4
 
-# Use in metadynamics
-METAD ARG=ab_chainA.alpha,ab_chainA.beta SIGMA=0.05,0.05 HEIGHT=1.2 PACE=500 FILE=HILLS`
+PRINT ARG=ab FILE=colvar STRIDE=10`
             }
         ],
         notes: [
-            'The alpha and beta values range from 0 to 1.',
-            'The sum of alpha and beta may be less than 1 if there are other secondary structure elements (loops, turns, etc.).',
-            'The DSSP algorithm is the most commonly used method for secondary structure assignment.',
-            'This CV requires backbone atoms (typically CA, C, N, O) for accurate assignment.'
+            'ALPHABETA measures how close the instantaneous torsion angles are to reference values.',
+            'The value of the CV is (1/2) Σᵢ [1+cos(θᵢ - θᵢʳᵉᶠ)].',
+            'A value of 1 indicates all angles are exactly at their reference values.',
+            'Each ATOMSn keyword should specify exactly 4 atoms defining a torsion angle.',
+            'Reference values are in radians.'
         ],
-        related: ['TORSION', 'ANGLE', 'RMSD']
+        related: ['TORSION', 'ANGLE', 'MOLINFO', 'ALPHARMSD', 'ANTIBETARMSD']
     },
     
     'MULTICOLVAR': {
@@ -1509,17 +1521,18 @@ After loading molecular information with MOLINFO, you can use special atom group
 - @sidechain : all sidechain atoms
 
 This makes it much easier to define CVs for proteins without manually specifying atom numbers.`,
-        syntax: 'MOLINFO STRUCTURE=<file> MOLTYPE=<type>',
+        syntax: 'MOLINFO STRUCTURE=<file> [MOLTYPE=<type>]',
         options: [
             {
                 keyword: 'STRUCTURE',
                 required: true,
-                description: 'the PDB file containing the molecular structure'
+                description: 'a file in pdb format containing a reference structure. This is used to defines the atoms in the various residues, chains, etc. For more details on the PDB file format visit http://www.wwpdb.org/docs.html'
             },
             {
                 keyword: 'MOLTYPE',
-                required: true,
-                description: 'the type of molecule. Options are: protein, rna, dna, or other.'
+                required: false,
+                default: 'protein',
+                description: '( default=protein ) what kind of molecule is contained in the pdb file - usually not needed since protein/RNA/DNA are compatible'
             }
         ],
         components: [],
@@ -1569,22 +1582,35 @@ CV_combined = Σᵢ cᵢ × CVᵢ
 where cᵢ are the coefficients and CVᵢ are the input collective variables.
 
 COMBINE can also handle periodic CVs by specifying the periodicity.`,
-        syntax: 'COMBINE ARG=<cv1>,<cv2>,... COEFFICIENTS=<c1>,<c2>,... [PERIODIC=<periodic>]',
+        syntax: 'COMBINE ARG=<cv1>,<cv2>,... PERIODIC=<NO or min,max> [COEFFICIENTS=<c1>,<c2>,...] [PARAMETERS=<p1>,<p2>,...] [POWERS=<pow1>,<pow2>,...]',
         options: [
             {
                 keyword: 'ARG',
-                required: true,
-                description: 'the list of collective variables to combine. These must be defined before COMBINE is called.'
-            },
-            {
-                keyword: 'COEFFICIENTS',
-                required: true,
-                description: 'the coefficients for each CV in ARG. The number of coefficients must match the number of CVs.'
+                required: false,
+                description: 'the input for this action is the scalar output from one or more other actions. The particular scalars that you will use are referenced using the label of the action.'
             },
             {
                 keyword: 'PERIODIC',
+                required: true,
+                description: 'if the output of your function is periodic then you should specify the periodicity of the function. If the output is not periodic you must state this using PERIODIC=NO.'
+            },
+            {
+                keyword: 'COEFFICIENTS',
                 required: false,
-                description: 'the periodicity of the combined CV. If not specified, the CV is treated as non-periodic. Format: PERIODIC=min,max'
+                default: '1.0',
+                description: '( default=1.0 ) the coefficients of the arguments in your function.'
+            },
+            {
+                keyword: 'PARAMETERS',
+                required: false,
+                default: '0.0',
+                description: '( default=0.0 ) the parameters of the arguments in your function.'
+            },
+            {
+                keyword: 'POWERS',
+                required: false,
+                default: '1.0',
+                description: '( default=1.0 ) the powers to which you are raising each of the arguments in your function.'
             }
         ],
         components: [],
@@ -1646,22 +1672,27 @@ CUSTOM is useful for:
 - Defining custom reaction coordinates
 - Applying mathematical transformations
 - Combining multiple CVs with non-linear functions`,
-        syntax: 'CUSTOM ARG=<cv1>,<cv2>,... FUNC=<expression> [PERIODIC=<periodic>]',
+        syntax: 'CUSTOM ARG=<cv1>,<cv2>,... FUNC=<expression> PERIODIC=<NO or min,max> [VAR=<var1>,<var2>,...]',
         options: [
             {
                 keyword: 'ARG',
-                required: true,
-                description: 'the list of collective variables to use in the expression. These are referred to as x, y, z, ... in the FUNC expression.'
+                required: false,
+                description: 'the input for this action is the scalar output from one or more other actions. The particular scalars that you will use are referenced using the label of the action.'
             },
             {
                 keyword: 'FUNC',
                 required: true,
-                description: 'the mathematical expression to evaluate. Use x, y, z, ... to refer to the arguments in order. Example: "x*y+sin(x)" or "sqrt(x^2+y^2)"'
+                description: 'the function you wish to evaluate'
             },
             {
                 keyword: 'PERIODIC',
+                required: true,
+                description: 'if the output of your function is periodic then you should specify the periodicity of the function. If the output is not periodic you must state this using PERIODIC=NO'
+            },
+            {
+                keyword: 'VAR',
                 required: false,
-                description: 'the periodicity of the resulting CV. Use NO for non-periodic, or specify the period (e.g., PERIODIC=-pi,pi for angles)'
+                description: 'the names to give each of the arguments in the function. If you have up to three arguments in your function you can use x, y and z to refer to them. Otherwise you must use this flag to give your variables names.'
             }
         ],
         components: [],
@@ -1972,32 +2003,35 @@ RESTRAINT is useful for:
 - Applying constant forces
 - Steering simulations
 - Constraining CVs to target values`,
-        syntax: 'RESTRAINT ARG=<cv> AT=<value> KAPPA=<kappa> [SLOPE=<slope>] [LABEL=<label>]',
+        syntax: 'RESTRAINT ARG=<cv> AT=<value> [KAPPA=<kappa>] [SLOPE=<slope>]',
         options: [
             {
                 keyword: 'ARG',
-                required: true,
-                description: 'the collective variable to restrain'
-            },
-            {
-                keyword: 'AT',
-                required: true,
-                description: 'the target value for the CV. The restraint tries to keep the CV at this value.'
-            },
-            {
-                keyword: 'KAPPA',
-                required: true,
-                description: 'the force constant for the harmonic restraint. Larger values give stronger restraints. Units: energy / CV_unit²'
+                required: false,
+                description: 'the input for this action is the scalar output from one or more other actions. The particular scalars that you will use are referenced using the label of the action.'
             },
             {
                 keyword: 'SLOPE',
                 required: false,
-                description: 'the slope for a linear restraint. If specified, a linear potential is added in addition to the harmonic one.'
+                default: '0.0',
+                description: '( default=0.0 ) specifies that the restraint is linear and what the values of the force constants on each of the variables are.'
             },
             {
-                keyword: 'LABEL',
+                keyword: 'KAPPA',
                 required: false,
-                description: 'a label for the action so that it can be referenced in other actions'
+                default: '0.0',
+                description: '( default=0.0 ) specifies that the restraint is harmonic and what the values of the force constants on each of the variables are.'
+            },
+            {
+                keyword: 'AT',
+                required: true,
+                description: 'the position of the restraint.'
+            },
+            {
+                keyword: 'NUMERICAL_DERIVATIVES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) calculate the derivatives for these quantities numerically.'
             }
         ],
         components: [],
@@ -2060,17 +2094,17 @@ LOWER_WALLS is useful for:
 - Keeping CVs above a minimum value
 - Defining boundaries in CV space
 - Avoiding numerical instabilities`,
-        syntax: 'LOWER_WALLS ARG=<cv> AT=<value> KAPPA=<kappa> [EXP=<exp>] [EPS=<eps>] [OFFSET=<offset>]',
+        syntax: 'LOWER_WALLS ARG=<cv> AT=<value> KAPPA=<kappa> [EXP=<exp>] [OFFSET=<offset>]',
         options: [
             {
                 keyword: 'ARG',
-                required: true,
-                description: 'the collective variable on which to apply the lower wall'
+                required: false,
+                description: 'the input for this action is the scalar output from one or more other actions. The particular scalars that you will use are referenced using the label of the action.'
             },
             {
                 keyword: 'AT',
                 required: true,
-                description: 'the position of the lower wall. The CV cannot go below this value.'
+                description: 'the positions of the wall. The a_i in the expression for a wall.'
             },
             {
                 keyword: 'KAPPA',
@@ -2546,17 +2580,12 @@ BIASVALUE is useful for:
 - Chaining actions
 - Creating custom bias functions
 - Testing bias implementations`,
-        syntax: 'BIASVALUE ARG=<action> [LABEL=<label>]',
+        syntax: 'BIASVALUE ARG=<action>',
         options: [
             {
                 keyword: 'ARG',
-                required: true,
-                description: 'the action whose value should be used as a bias. This can be a CV or any other action that outputs a scalar value.'
-            },
-            {
-                keyword: 'LABEL',
                 required: false,
-                description: 'a label for the action'
+                description: 'the input for this action is the scalar output from one or more other actions. The particular scalars that you will use are referenced using the label of the action.'
             }
         ],
         components: [],
@@ -3024,8 +3053,8 @@ ALPHARMSD is useful for:
             {
                 keyword: 'TYPE',
                 required: false,
-                default: 'OPTIMAL',
-                description: '( default=OPTIMAL ) the type of comparison to perform'
+                default: 'DRMSD',
+                description: '( default=DRMSD ) the manner in which RMSD alignment is performed. Should be OPTIMAL, SIMPLE or DRMSD.'
             },
             {
                 keyword: 'NOPBC',
@@ -3082,8 +3111,8 @@ ANTIBETARMSD is useful for:
             {
                 keyword: 'TYPE',
                 required: false,
-                default: 'OPTIMAL',
-                description: '( default=OPTIMAL ) the type of comparison to perform'
+                default: 'DRMSD',
+                description: '( default=DRMSD ) the manner in which RMSD alignment is performed. Should be OPTIMAL, SIMPLE or DRMSD.'
             },
             {
                 keyword: 'NOPBC',
@@ -3247,17 +3276,29 @@ CONTACTMAP is useful for:
 - Structural analysis
 - Protein folding studies
 - Conformational analysis`,
-        syntax: 'CONTACTMAP ATOMS=<group> SWITCH=<switching_function> [NOPBC] [NUMERICAL_DERIVATIVES]',
+        syntax: 'CONTACTMAP ATOMS1=<pair1> ATOMS2=<pair2> ... SWITCH=<switching_function> [REFERENCE=<ref>] [WEIGHT=<weight>]',
         options: [
             {
                 keyword: 'ATOMS',
                 required: true,
-                description: 'the atoms for which to calculate the contact map'
+                description: 'the atoms involved in each of the contacts you wish to calculate. Keywords like ATOMS1, ATOMS2, ATOMS3,... should be listed and one contact will be calculated for each ATOM keyword you specify. You can use multiple instances of this keyword i.e. ATOMS1, ATOMS2, ATOMS3...'
             },
             {
                 keyword: 'SWITCH',
                 required: true,
-                description: 'the switching function to apply to distances (e.g., {RATIONAL R_0=5.0 D_0=1.0})'
+                description: 'The switching functions to use for each of the contacts in your map. You can either specify a global switching function using SWITCH or one switching function for each contact. Details of the various switching functions you can use are provided on switchingfunction. You can use multiple instances of this keyword i.e. SWITCH1, SWITCH2, SWITCH3...'
+            },
+            {
+                keyword: 'REFERENCE',
+                required: false,
+                default: '0.0',
+                description: 'A reference value for a given contact, by default is 0.0. You can either specify a global reference value using REFERENCE or one reference value for each contact. You can use multiple instances of this keyword i.e. REFERENCE1, REFERENCE2, REFERENCE3...'
+            },
+            {
+                keyword: 'WEIGHT',
+                required: false,
+                default: '1.0',
+                description: 'A weight value for a given contact, by default is 1.0. You can use multiple instances of this keyword i.e. WEIGHT1, WEIGHT2, WEIGHT3...'
             },
             {
                 keyword: 'NOPBC',
@@ -3389,23 +3430,12 @@ DIHCOR is useful for:
 - Measuring structural similarity
 - Analyzing conformational changes
 - Identifying similar conformations`,
-        syntax: 'DIHCOR ATOMS=<group> REFERENCE=<file> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
+        syntax: 'DIHCOR ATOMS1=<8atoms> ATOMS2=<8atoms> ... [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'ATOMS',
                 required: true,
-                description: 'the atoms involved in the dihedral angles'
-            },
-            {
-                keyword: 'REFERENCE',
-                required: true,
-                description: 'the reference structure file'
-            },
-            {
-                keyword: 'TYPE',
-                required: false,
-                default: 'OPTIMAL',
-                description: '( default=OPTIMAL ) the type of comparison to perform'
+                description: 'the atoms involved in each of the dihedral correlation values you wish to calculate. Keywords like ATOMS1, ATOMS2, ATOMS3,... should be listed and one dihedral correlation will be calculated for each ATOM keyword you specify (all ATOM keywords should specify the indices of 8 atoms). You can use multiple instances of this keyword i.e. ATOMS1, ATOMS2, ATOMS3...'
             },
             {
                 keyword: 'NOPBC',
@@ -3424,8 +3454,8 @@ DIHCOR is useful for:
         examples: [
             {
                 title: 'Dihedral correlation',
-                code: `# Dihedral correlation with reference
-dihcor: DIHCOR ATOMS=1-100 REFERENCE=ref.pdb`
+                code: `# Dihedral correlation between two sets of 8 atoms
+dihcor: DIHCOR ATOMS1=1,2,3,4,5,6,7,8 ATOMS2=9,10,11,12,13,14,15,16`
             }
         ],
         notes: [
@@ -3517,22 +3547,18 @@ DIPOLE is useful for:
 - Studying electric field effects
 - Analyzing charge distributions
 - Modeling polar molecules`,
-        syntax: 'DIPOLE ATOMS=<group> [COMPONENTS] [CENTER=<center>] [NOPBC] [NUMERICAL_DERIVATIVES]',
+        syntax: 'DIPOLE GROUP=<group> [COMPONENTS] [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
-                keyword: 'ATOMS',
+                keyword: 'GROUP',
                 required: true,
-                description: 'the atoms for which to calculate the dipole moment'
+                description: 'the group of atoms we are calculating the dipole moment for. For more information on how to specify lists of atoms see Groups and Virtual Atoms.'
             },
             {
                 keyword: 'COMPONENTS',
                 required: false,
-                description: 'calculate the x, y, and z components separately'
-            },
-            {
-                keyword: 'CENTER',
-                required: false,
-                description: 'the center for calculating the dipole (default is center of mass)'
+                default: 'off',
+                description: '( default=off ) calculate the x, y and z components of the dipole separately and store them as label.x, label.y and label.z.'
             },
             {
                 keyword: 'NOPBC',
@@ -3569,12 +3595,12 @@ DIPOLE is useful for:
             {
                 title: 'Basic dipole moment',
                 code: `# Dipole moment
-dipole: DIPOLE ATOMS=1-100`
+dipole: DIPOLE GROUP=1-100`
             },
             {
                 title: 'Dipole components',
                 code: `# Dipole with components
-dipole: DIPOLE ATOMS=1-100 COMPONENTS`
+dipole: DIPOLE GROUP=1-100 COMPONENTS`
             }
         ],
         notes: [
@@ -3709,18 +3735,17 @@ ERMSD is useful for:
 - Measuring ensemble similarity
 - Analyzing conformational variability
 - Studying structural diversity`,
-        syntax: 'ERMSD REFERENCE=<file> [TYPE=<type>] [ATOMS=<group>] [NOPBC] [NUMERICAL_DERIVATIVES]',
+        syntax: 'ERMSD REFERENCE=<file> ATOMS=<@lcs-list> [NOPBC] [NUMERICAL_DERIVATIVES]',
         options: [
             {
                 keyword: 'REFERENCE',
                 required: true,
-                description: 'the reference structure file'
+                description: 'a file in pdb format containing the reference structure and the atoms involved in the CV.'
             },
             {
-                keyword: 'TYPE',
-                required: false,
-                default: 'OPTIMAL',
-                description: '( default=OPTIMAL ) the type of alignment to perform'
+                keyword: 'ATOMS',
+                required: true,
+                description: 'the list of atoms (use lcs). For more information on how to specify lists of atoms see Groups and Virtual Atoms.'
             },
             {
                 keyword: 'ATOMS',
@@ -3871,23 +3896,17 @@ FUNCPATHMSD is useful for:
 - Reaction coordinate definition
 - Transition path analysis
 - Free energy calculations along paths`,
-        syntax: 'FUNCPATHMSD REFERENCE=<file> LAMBDA=<lambda> [TYPE=<type>] [NOPBC] [NUMERICAL_DERIVATIVES]',
+        syntax: 'FUNCPATHMSD ARG=<cv1>,<cv2>,... LAMBDA=<lambda>',
         options: [
             {
-                keyword: 'REFERENCE',
-                required: true,
-                description: 'the reference path file containing multiple structures along the path'
+                keyword: 'ARG',
+                required: false,
+                description: 'the input for this action is the scalar output from one or more other actions. The particular scalars that you will use are referenced using the label of the action.'
             },
             {
                 keyword: 'LAMBDA',
                 required: true,
-                description: 'the progress variable along the path (0 to 1)'
-            },
-            {
-                keyword: 'TYPE',
-                required: false,
-                default: 'OPTIMAL',
-                description: '( default=OPTIMAL ) the type of alignment to perform'
+                description: 'the lambda parameter is needed for smoothing, is in the units of plumed'
             },
             {
                 keyword: 'NOPBC',
@@ -3915,11 +3934,14 @@ FUNCPATHMSD is useful for:
         examples: [
             {
                 title: 'Path MSD function',
-                code: `# Path MSD
-funcpathmsd: FUNCPATHMSD REFERENCE=path.pdb LAMBDA=0.5
+                code: `# Path MSD using RMSD CVs
+t1: RMSD REFERENCE=frame1.pdb TYPE=OPTIMAL
+t2: RMSD REFERENCE=frame2.pdb TYPE=OPTIMAL
+t3: RMSD REFERENCE=frame3.pdb TYPE=OPTIMAL
+p1: FUNCPATHMSD ARG=t1,t2,t3 LAMBDA=50.0
 
 # Print path CVs
-PRINT ARG=funcpathmsd.s,funcpathmsd.z FILE=colvar STRIDE=10`
+PRINT ARG=p1.s,p1.z FILE=colvar STRIDE=10`
             }
         ],
         notes: [
@@ -4152,8 +4174,8 @@ PARABETARMSD is useful for:
             {
                 keyword: 'TYPE',
                 required: false,
-                default: 'OPTIMAL',
-                description: '( default=OPTIMAL ) the type of comparison to perform'
+                default: 'DRMSD',
+                description: '( default=DRMSD ) the manner in which RMSD alignment is performed. Should be OPTIMAL, SIMPLE or DRMSD.'
             },
             {
                 keyword: 'NOPBC',
@@ -9228,54 +9250,76 @@ PRINT ARG=maze FILE=maze.dat`
         related: ['FUNNEL', 'METAD', 'DISTANCE']
     },
     'OPES': {
-        module: 'Additional Modules',
+        module: 'opes',
         description: [
-            'On-the-fly Probability Enhanced Sampling. Enhanced sampling method that adaptively builds a bias potential based on the probability distribution.',
-            'OPES automatically learns the optimal bias potential during the simulation.',
-            'More efficient than traditional metadynamics as it directly targets the probability distribution.',
-            'Useful for free energy calculations and exploring complex energy landscapes.'
+            'On-the-fly Probability Enhanced Sampling (OPES_METAD). This action samples target distributions defined via their marginal over some collective variables (CVs).',
+            'By default OPES_METAD targets the well-tempered distribution, p^WT(s) ∝ [P(s)]^(1/γ), where γ is known as BIASFACTOR.',
+            'OPES_METAD optimizes the bias on-the-fly, with a given PACE. It does so by reweighting via kernel density estimation the unbiased distribution in the CV space.',
+            'A compression algorithm is used to prevent the number of kernels from growing linearly with the simulation time.',
+            'The parameter BARRIER should be set to be at least equal to the highest free energy barrier you wish to overcome.'
         ],
-        syntax: 'OPES ARG=<cv1>,<cv2>,... SIGMA=<sigma1>,<sigma2>,... [PACE=<pace>]',
+        syntax: 'OPES_METAD ARG=<cv1>,<cv2>,... PACE=<pace> BARRIER=<barrier> [BIASFACTOR=<factor>] [STATE_WFILE=<file>] [STATE_WSTRIDE=<stride>]',
         options: [
             {
                 keyword: 'ARG',
-                required: true,
-                description: 'Collective variables to apply OPES to.'
-            },
-            {
-                keyword: 'SIGMA',
-                required: true,
-                description: 'Width of the Gaussian kernels for each CV (one value per CV).'
+                required: false,
+                description: 'the input for this action is the scalar output from one or more other actions.'
             },
             {
                 keyword: 'PACE',
+                required: true,
+                description: 'the frequency for kernel deposition.'
+            },
+            {
+                keyword: 'BARRIER',
+                required: true,
+                description: 'the free energy barrier to be overcome. It is used to set BIASFACTOR, EPSILON, and KERNEL_CUTOFF to reasonable values.'
+            },
+            {
+                keyword: 'BIASFACTOR',
                 required: false,
-                default: '500',
-                description: 'Frequency (in steps) at which to add Gaussian kernels.'
+                description: 'the γ bias factor used for well-tempered target distribution. Set to 0 for uniform flat target.'
+            },
+            {
+                keyword: 'STATE_WFILE',
+                required: false,
+                description: 'write to this file the compressed kernels and all the info needed to RESTART the simulation.'
+            },
+            {
+                keyword: 'STATE_WSTRIDE',
+                required: false,
+                description: 'number of MD steps between writing the STATE_WFILE.'
+            },
+            {
+                keyword: 'STORE_STATES',
+                required: false,
+                default: 'off',
+                description: '( default=off ) append to STATE_WFILE instead of overwriting it each time.'
             }
         ],
         components: [],
         examples: [
             {
-                title: 'OPES on distance CV',
-                code: `# OPES
-d: DISTANCE ATOMS=1,2
-opes: OPES ARG=d SIGMA=0.1 PACE=500
-PRINT ARG=opes FILE=opes.dat`
+                title: 'Basic OPES_METAD',
+                code: `# OPES_METAD
+cv: DISTANCE ATOMS=1,2
+opes: OPES_METAD ARG=cv PACE=200 BARRIER=50
+PRINT STRIDE=200 FILE=COLVAR ARG=*`
             },
             {
-                title: 'OPES on multiple CVs',
-                code: `# OPES on multiple CVs
-d1: DISTANCE ATOMS=1,2
-d2: DISTANCE ATOMS=3,4
-opes: OPES ARG=d1,d2 SIGMA=0.1,0.15 PACE=500
-PRINT ARG=opes FILE=opes.dat`
+                title: 'OPES_METAD with checkpoint',
+                code: `# OPES_METAD with checkpointing for restart
+phi: TORSION ATOMS=@phi-3
+psi: TORSION ATOMS=@psi-3
+opes: OPES_METAD ARG=phi,psi PACE=500 BARRIER=50 STATE_WFILE=Restart.state STATE_WSTRIDE=50000 STORE_STATES
+PRINT STRIDE=500 FILE=Colvar.data ARG=phi,psi,opes.*`
             }
         ],
         notes: [
-            'Automatically learns the optimal bias potential.',
-            'More efficient than traditional metadynamics.',
-            'Directly targets the probability distribution for better sampling.'
+            'BARRIER parameter should be at least equal to the highest free energy barrier you wish to overcome.',
+            'More efficient than traditional metadynamics due to compression algorithm.',
+            'Directly targets the probability distribution for better sampling.',
+            'For exact restart use STATE_RFILE to read a checkpoint with all the needed info.'
         ],
         related: ['METAD', 'PBMETAD', 'VES']
     },

@@ -4,6 +4,7 @@ AMBER Structure Preparation Script using MDAnalysis
 Complete pipeline: extract protein, add caps, handle ligands
 """
 
+import glob
 import os
 import subprocess
 import sys
@@ -47,7 +48,8 @@ def extract_protein_only(pdb_content, output_file, selected_chains=None):
             chain_filters = ' or '.join([f'chain {c}' for c in selected_chains])
             chain_sel = f' and ({chain_filters})'
         selection = f"protein{chain_sel} and not name H* 1H* 2H* 3H*"
-        cmd = f'python -c "import MDAnalysis as mda; u=mda.Universe(\'{output_file}\'); u.select_atoms(\'{selection}\').write(\'{output_file}\')"'
+        abspath = os.path.abspath(output_file)
+        cmd = f'python -c "import MDAnalysis as mda; u=mda.Universe(\'{abspath}\'); u.select_atoms(\'{selection}\').write(\'{abspath}\')"'
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
         
         if result.returncode != 0:
@@ -76,6 +78,52 @@ def add_capping_groups(input_file, output_file):
         os.remove(temp_capped)
     
     return True
+
+
+def replace_chain_in_pdb(target_pdb, chain_id, source_pdb):
+    """
+    Replace a specific chain in target_pdb with the chain from source_pdb.
+    Only performs replacement if the target actually contains the chain_id.
+    Used to merge ESMFold-minimized chains into 1_protein_no_hydrogens.pdb.
+    If the source has no ATOM lines (or none matching the chain), we do NOT
+    modify the target, to avoid wiping the protein when the minimized file is
+    empty or has an unexpected format.
+    """
+    with open(target_pdb, 'r') as f:
+        target_lines = f.readlines()
+    if not any(
+        ln.startswith(('ATOM', 'HETATM')) and len(ln) >= 22 and ln[21] == chain_id
+        for ln in target_lines
+    ):
+        return
+    with open(source_pdb, 'r') as f:
+        source_lines = f.readlines()
+    source_chain_lines = []
+    for ln in source_lines:
+        if ln.startswith(('ATOM', 'HETATM')) and len(ln) >= 22:
+            ch = ln[21]
+            if ch == 'A' or ch == chain_id:
+                source_chain_lines.append(ln[:21] + chain_id + ln[22:])
+    if not source_chain_lines:
+        # Fallback: minimized PDB may use chain ' ' or other; take all ATOM/HETATM.
+        for ln in source_lines:
+            if ln.startswith(('ATOM', 'HETATM')) and len(ln) >= 22:
+                source_chain_lines.append(ln[:21] + chain_id + ln[22:])
+    if not source_chain_lines:
+        return  # Do not modify target: we have nothing to add; avoid wiping the protein.
+    filtered_target = [
+        ln for ln in target_lines
+        if not (ln.startswith(('ATOM', 'HETATM')) and len(ln) >= 22 and ln[21] == chain_id)
+    ]
+    combined = []
+    for ln in filtered_target:
+        if ln.startswith('END'):
+            combined.extend(source_chain_lines)
+            combined.append("TER\n")
+        combined.append(ln)
+    with open(target_pdb, 'w') as f:
+        f.writelines(combined)
+
 
 def extract_selected_chains(pdb_content, output_file, selected_chains):
     """Extract selected chains using PyMOL commands"""
@@ -620,13 +668,15 @@ def prepare_structure(pdb_content, options, output_dir="output"):
         os.makedirs(output_dir, exist_ok=True)
         
         # Define all file paths in output directory
-        # Use completed structure if available, otherwise use original input
+        # Prefer the superimposed completed structure (0_complete_structure.pdb) when it
+        # exists: it has ESMFold/minimized chains aligned to the original frame so that
+        # ligands stay in the same coordinate frame throughout the pipeline.
         complete_structure_file = os.path.join(output_dir, "0_complete_structure.pdb")
         original_input_file = os.path.join(output_dir, "0_original_input.pdb")
         
         if os.path.exists(complete_structure_file):
             input_file = complete_structure_file
-            logger.info("Using completed structure (0_complete_structure.pdb) as input")
+            logger.info("Using superimposed completed structure (0_complete_structure.pdb) as input for coordinate-frame consistency with ligands")
         else:
             input_file = original_input_file
             logger.info("Using original input (0_original_input.pdb) as input")
@@ -685,6 +735,20 @@ def prepare_structure(pdb_content, options, output_dir="output"):
         
         if not extract_protein_only(chain_content, protein_file):
             raise Exception("Failed to extract protein")
+        
+        # Step 1b: Merge minimized chains into 1_protein_no_hydrogens.pdb only when the
+        # input is NOT 0_complete_structure. When we use 0_complete_structure, it was
+        # built by rebuild_pdb_with_esmfold, which already incorporates and superimposes
+        # the minimized chains; the raw *_esmfold_minimized_noH.pdb files are in the
+        # minimization frame, so merging them here would break the coordinate frame.
+        if input_file != complete_structure_file:
+            for path in glob.glob(os.path.join(output_dir, "*_chain_*_esmfold_minimized_noH.pdb")):
+                name = os.path.basename(path).replace(".pdb", "")
+                parts = name.split("_chain_")
+                if len(parts) == 2:
+                    chain_id = parts[1].split("_")[0]
+                    replace_chain_in_pdb(protein_file, chain_id, path)
+                    logger.info("Merged minimized chain %s into 1_protein_no_hydrogens.pdb", chain_id)
         
         # Step 2: Add capping groups (only if add_ace or add_nme is True)
         add_ace = options.get('add_ace', True)

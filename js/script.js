@@ -174,6 +174,16 @@ class MDSimulationPipeline {
             });
         }
 
+        // Docking section
+        const runDockingBtn = document.getElementById('run-docking');
+        if (runDockingBtn) {
+            runDockingBtn.addEventListener('click', () => this.runDocking());
+        }
+        const applyDockingPosesBtn = document.getElementById('apply-docking-poses');
+        if (applyDockingPosesBtn) {
+            applyDockingPosesBtn.addEventListener('click', () => this.applyDockingPoses());
+        }
+
         // Navigation buttons
         document.getElementById('prev-tab').addEventListener('click', () => this.previousTab());
         document.getElementById('next-tab').addEventListener('click', () => this.nextTab());
@@ -592,9 +602,11 @@ class MDSimulationPipeline {
         this.showStatus('info', 'Fetching PDB structure...');
         
         try {
-            const response = await fetch(`https://files.rcsb.org/download/${pdbId}.pdb`);
+            // Use backend proxy to fetch PDB (avoids CORS issues)
+            const response = await fetch(`/api/proxy-pdb/${pdbId}`);
             if (!response.ok) {
-                throw new Error(`PDB ID ${pdbId} not found`);
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || `PDB ID ${pdbId} not found`);
             }
             
             const content = await response.text();
@@ -958,7 +970,8 @@ class MDSimulationPipeline {
         
         // Auto-scroll to bottom only if modal is visible and autoScroll is enabled
         if (autoScroll) {
-            const logModal = document.getElementById('ligand-ff-log-modal');
+            // Check both ligand-ff and docking log modals
+            const logModal = document.getElementById('ligand-ff-log-modal') || document.getElementById('docking-log-modal');
             if (logModal && logModal.style.display === 'block' && container.parentElement) {
                 // Check if user is near bottom before auto-scrolling
                 const isNearBottom = container.parentElement.scrollTop + container.parentElement.clientHeight >= 
@@ -1005,6 +1018,461 @@ class MDSimulationPipeline {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    createDockingLogModal() {
+        const modal = document.createElement('div');
+        modal.id = 'docking-log-modal';
+        modal.className = 'log-modal';
+        const self = this;
+        modal.innerHTML = `
+            <div class="log-modal-content">
+                <div class="log-modal-header">
+                    <h3><i class="fas fa-vial"></i> Running Docking - Live Logs</h3>
+                    <button class="log-modal-close" onclick="this.closest('.log-modal').style.display='none'">&times;</button>
+                </div>
+                <div class="log-container">
+                    <div class="log-content"></div>
+                </div>
+            </div>
+        `;
+        // Add click handler to modal background to close
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                modal.style.display = 'none';
+            }
+        });
+        return modal;
+    }
+
+    renderDockingLogs(logContent) {
+        // Store current scroll position if modal is visible
+        const logModal = document.getElementById('docking-log-modal');
+        const wasAtBottom = logModal && logModal.style.display === 'block' && 
+                           logContent.parentElement && 
+                           (logContent.parentElement.scrollTop + logContent.parentElement.clientHeight >= logContent.parentElement.scrollHeight - 10);
+        
+        logContent.innerHTML = '';
+        if (this.dockingLogs && this.dockingLogs.length > 0) {
+            this.dockingLogs.forEach(logEntry => {
+                if (logEntry.type === 'result') {
+                    this.displayDockingFinalResult(logEntry.data, logContent);
+                } else {
+                    this.addLogLine(logContent, logEntry.message, logEntry.type || 'info', false);
+                }
+            });
+        }
+        
+        // Restore scroll position or scroll to bottom
+        if (logModal && logModal.style.display === 'block' && logContent.parentElement) {
+            if (wasAtBottom) {
+                logContent.parentElement.scrollTop = logContent.parentElement.scrollHeight;
+            }
+        }
+    }
+
+    displayDockingFinalResult(data, container) {
+        const resultDiv = document.createElement('div');
+        resultDiv.className = 'log-result';
+        resultDiv.innerHTML = '<h4>📊 Docking Results:</h4>';
+        
+        if (data.ligands && data.ligands.length > 0) {
+            let resultHtml = `<p><strong>✅ Successfully docked ${data.ligands.length} ligand(s)</strong></p><ul>`;
+            data.ligands.forEach(ligand => {
+                const ligName = ligand.name || `Ligand ${ligand.index}`;
+                resultHtml += `<li><strong>${ligName}:</strong><br>`;
+                resultHtml += `&nbsp;&nbsp;Original: ${ligand.original_file}<br>`;
+                resultHtml += `&nbsp;&nbsp;Poses: ${ligand.poses.length}<br>`;
+                if (ligand.poses.length > 0) {
+                    resultHtml += `&nbsp;&nbsp;Binding energies:<br>`;
+                    ligand.poses.forEach(pose => {
+                        const energy = pose.energy !== null && pose.energy !== undefined ? pose.energy.toFixed(2) : 'N/A';
+                        resultHtml += `&nbsp;&nbsp;&nbsp;&nbsp;- Mode ${pose.mode_index}: ${energy} kcal/mol<br>`;
+                    });
+                }
+                resultHtml += `</li>`;
+            });
+            resultHtml += '</ul>';
+            
+            if (data.warnings && data.warnings.length > 0) {
+                resultHtml += '<p><strong>⚠️ Warnings:</strong></p><ul>';
+                data.warnings.forEach(warn => {
+                    resultHtml += `<li>${this.escapeHtml(warn)}</li>`;
+                });
+                resultHtml += '</ul>';
+            }
+            
+            if (data.errors && data.errors.length > 0) {
+                resultHtml += '<p><strong>❌ Errors:</strong></p><ul>';
+                data.errors.forEach(err => {
+                    resultHtml += `<li>${this.escapeHtml(err)}</li>`;
+                });
+                resultHtml += '</ul>';
+            }
+            
+            resultDiv.innerHTML += resultHtml;
+        } else {
+            resultDiv.innerHTML += '<p>No ligands were docked.</p>';
+        }
+        
+        container.appendChild(resultDiv);
+        container.parentElement.scrollTop = container.parentElement.scrollHeight;
+    }
+
+    addViewDockingLogsButton(button) {
+        // Remove existing button if any
+        this.removeViewDockingLogsButton();
+        
+        // Create view logs button
+        const viewLogsBtn = document.createElement('button');
+        viewLogsBtn.id = 'view-docking-logs-btn';
+        viewLogsBtn.className = 'btn btn-info';
+        viewLogsBtn.style.marginLeft = '10px';
+        viewLogsBtn.innerHTML = '<i class="fas fa-terminal"></i> View Logs';
+        viewLogsBtn.onclick = () => this.showDockingLogModal();
+        
+        // Insert after the run button
+        if (button && button.parentNode) {
+            button.parentNode.insertBefore(viewLogsBtn, button.nextSibling);
+        }
+    }
+
+    removeViewDockingLogsButton() {
+        const btn = document.getElementById('view-docking-logs-btn');
+        if (btn) {
+            btn.remove();
+        }
+    }
+
+    showDockingLogModal() {
+        let logModal = document.getElementById('docking-log-modal');
+        if (!logModal) {
+            logModal = this.createDockingLogModal();
+            document.body.appendChild(logModal);
+        }
+
+        const logContent = logModal.querySelector('.log-content');
+        const logContainer = logModal.querySelector('.log-container');
+        
+        // Re-render all logs to ensure we have the latest
+        this.renderDockingLogs(logContent);
+        
+        logModal.style.display = 'block';
+        // Scroll to bottom after a brief delay to ensure content is rendered
+        setTimeout(() => {
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }, 100);
+    }
+
+    showESMFoldLogModal() {
+        let logModal = document.getElementById('esmfold-log-modal');
+        if (!logModal) {
+            logModal = this.createESMFoldLogModal();
+            document.body.appendChild(logModal);
+        }
+
+        const logContent = logModal.querySelector('.log-content');
+        const logContainer = logModal.querySelector('.log-container');
+        
+        logModal.style.display = 'block';
+        // Scroll to bottom after a brief delay
+        setTimeout(() => {
+            if (logContainer) {
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+        }, 100);
+    }
+
+    createESMFoldLogModal() {
+        const modal = document.createElement('div');
+        modal.id = 'esmfold-log-modal';
+        modal.className = 'log-modal';
+        modal.style.display = 'none';
+        
+        modal.innerHTML = `
+            <div class="log-modal-content" style="max-width: 900px;">
+                <div class="log-modal-header">
+                    <h3><i class="fas fa-terminal"></i> ESMFold & Minimization Logs</h3>
+                    <button class="log-modal-close" onclick="this.closest('.log-modal').style.display='none'">&times;</button>
+                </div>
+                <div class="log-container" style="max-height: 600px; overflow-y: auto;">
+                    <div class="log-content" id="esmfold-log-content" style="font-family: 'Courier New', monospace; font-size: 12px; padding: 10px; background: #1e1e1e; color: #d4d4d4; white-space: pre-wrap; word-wrap: break-word;"></div>
+                </div>
+            </div>
+        `;
+        
+        // Add click handler to modal background to close
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                modal.style.display = 'none';
+            }
+        });
+        
+        return modal;
+    }
+
+    addESMFoldLogLine(message, type = 'info') {
+        const container = document.getElementById('esmfold-log-content');
+        if (!container) return;
+        
+        const line = document.createElement('div');
+        line.style.marginBottom = '2px';
+        
+        // Color coding based on type
+        if (type === 'error') {
+            line.style.color = '#f48771';
+        } else if (type === 'warning') {
+            line.style.color = '#dcdcaa';
+        } else if (type === 'success') {
+            line.style.color = '#4ec9b0';
+        } else {
+            line.style.color = '#d4d4d4';
+        }
+        
+        line.textContent = message;
+        container.appendChild(line);
+        
+        // Auto-scroll to bottom
+        const logContainer = container.parentElement;
+        if (logContainer) {
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+    }
+
+    async openVinaConfigEditor(ligandIndex) {
+        try {
+            // First, get current GUI values
+            const currentValues = this.getCurrentBoxValues(ligandIndex);
+            
+            // Fetch config file
+            const response = await fetch(`/api/docking/get-config?ligand_index=${ligandIndex}`);
+            const result = await response.json();
+            
+            if (!result.success) {
+                alert(`Error loading config: ${result.error}`);
+                return;
+            }
+            
+            // Update config content with current GUI values
+            let configContent = result.content;
+            configContent = this.updateConfigWithGUIValues(configContent, currentValues);
+            
+            // Create or get modal
+            let modal = document.getElementById('vina-config-modal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'vina-config-modal';
+                modal.className = 'log-modal';
+                modal.innerHTML = `
+                    <div class="log-modal-content" style="max-width: 800px;">
+                        <div class="log-modal-header">
+                            <h3><i class="fas fa-cog"></i> Vina Configuration - Ligand <span id="config-ligand-index"></span></h3>
+                            <button class="log-modal-close" onclick="document.getElementById('vina-config-modal').style.display='none'">&times;</button>
+                        </div>
+                        <div style="padding: 20px;">
+                            <p style="margin-bottom: 15px; color: #6c757d;">
+                                Edit the Vina configuration file. Changes will be saved automatically when you click "Save Config".
+                            </p>
+                            <textarea id="vina-config-editor" style="width: 100%; height: 400px; font-family: 'Courier New', monospace; font-size: 13px; padding: 10px; border: 1px solid #ced4da; border-radius: 5px; background: #f8f9fa;"></textarea>
+                            <div style="margin-top: 15px; display: flex; gap: 10px; justify-content: flex-end;">
+                                <button class="btn btn-secondary" onclick="document.getElementById('vina-config-modal').style.display='none'">Cancel</button>
+                                <button class="btn btn-primary" id="save-vina-config-btn">
+                                    <i class="fas fa-save"></i> Save Config
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                
+                // Add click handler to modal background to close
+                modal.addEventListener('click', function(e) {
+                    if (e.target === modal) {
+                        modal.style.display = 'none';
+                    }
+                });
+                
+                // Add save handler
+                const self = this;
+                document.getElementById('save-vina-config-btn').addEventListener('click', function() {
+                    const currentLigandIndex = parseInt(modal.dataset.ligandIndex || ligandIndex);
+                    self.saveVinaConfig(currentLigandIndex);
+                });
+            }
+            
+            // Update modal content (even if modal already existed)
+            // Get ligand name from dockingBoxDefaults or use index as fallback
+            const ligandInfo = this.dockingBoxDefaults && this.dockingBoxDefaults[ligandIndex];
+            const ligandName = ligandInfo ? (ligandInfo.name || `Ligand ${ligandIndex}`) : `Ligand ${ligandIndex}`;
+            document.getElementById('config-ligand-index').textContent = ligandName;
+            const editor = document.getElementById('vina-config-editor');
+            if (editor) {
+                editor.value = configContent;
+            }
+            
+            // Store current ligand index
+            modal.dataset.ligandIndex = ligandIndex;
+            
+            modal.style.display = 'block';
+            if (editor) {
+                editor.focus();
+            }
+        } catch (error) {
+            console.error('Error opening config editor:', error);
+            alert(`Error opening config editor: ${error.message}`);
+        }
+    }
+
+    getCurrentBoxValues(ligandIndex) {
+        // Get current values from GUI inputs
+        const cxEl = document.getElementById(`dock-lig${ligandIndex}-center-x`);
+        const cyEl = document.getElementById(`dock-lig${ligandIndex}-center-y`);
+        const czEl = document.getElementById(`dock-lig${ligandIndex}-center-z`);
+        const sxEl = document.getElementById(`dock-lig${ligandIndex}-size-x`);
+        const syEl = document.getElementById(`dock-lig${ligandIndex}-size-y`);
+        const szEl = document.getElementById(`dock-lig${ligandIndex}-size-z`);
+        
+        return {
+            center_x: cxEl ? parseFloat(cxEl.value) || 0 : 0,
+            center_y: cyEl ? parseFloat(cyEl.value) || 0 : 0,
+            center_z: czEl ? parseFloat(czEl.value) || 0 : 0,
+            size_x: sxEl ? parseFloat(sxEl.value) || 18 : 18,
+            size_y: syEl ? parseFloat(syEl.value) || 18 : 18,
+            size_z: szEl ? parseFloat(szEl.value) || 18 : 18
+        };
+    }
+
+    updateConfigWithGUIValues(configContent, values) {
+        // Update config content with current GUI values
+        // Replace existing values or add if they don't exist
+        let lines = configContent.split('\n');
+        const keys = ['center_x', 'center_y', 'center_z', 'size_x', 'size_y', 'size_z'];
+        const updatedKeys = new Set();
+        
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (line && !line.startsWith('#')) {
+                for (const key of keys) {
+                    if (line.startsWith(key + ' =')) {
+                        const newValue = key.startsWith('center') ? 
+                            values[key].toFixed(2) : 
+                            values[key].toFixed(1);
+                        lines[i] = `${key} = ${newValue}`;
+                        updatedKeys.add(key);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // If we didn't find some keys, add them after the comment section
+        const missingKeys = keys.filter(k => !updatedKeys.has(k));
+        if (missingKeys.length > 0) {
+            // Find where to insert (after comments, before other parameters)
+            let insertIndex = 0;
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].trim().startsWith('#')) {
+                    insertIndex = i + 1;
+                } else if (lines[i].trim() && !lines[i].trim().startsWith('#')) {
+                    break;
+                }
+            }
+            
+            // Insert missing values
+            const newLines = [];
+            for (const key of missingKeys) {
+                const value = key.startsWith('center') ? 
+                    values[key].toFixed(2) : 
+                    values[key].toFixed(1);
+                newLines.push(`${key} = ${value}`);
+            }
+            if (newLines.length > 0) {
+                lines.splice(insertIndex, 0, ...newLines);
+            }
+        }
+        
+        return lines.join('\n');
+    }
+
+    async updateConfigFileFromGUI(ligandIndex) {
+        // Silently update the config file with current GUI values
+        try {
+            const currentValues = this.getCurrentBoxValues(ligandIndex);
+            
+            // Fetch current config
+            const response = await fetch(`/api/docking/get-config?ligand_index=${ligandIndex}`);
+            const result = await response.json();
+            
+            if (!result.success) {
+                return; // Silently fail
+            }
+            
+            // Update config content
+            const updatedContent = this.updateConfigWithGUIValues(result.content, currentValues);
+            
+            // Save updated config
+            await fetch('/api/docking/save-config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    ligand_index: ligandIndex,
+                    content: updatedContent
+                })
+            });
+        } catch (error) {
+            // Silently fail - don't interrupt user workflow
+            console.debug('Error updating config file:', error);
+        }
+    }
+
+    async saveVinaConfig(ligandIndex) {
+        const editor = document.getElementById('vina-config-editor');
+        if (!editor) return;
+        
+        const content = editor.value;
+        if (!content.trim()) {
+            alert('Config file cannot be empty');
+            return;
+        }
+        
+        try {
+            const response = await fetch('/api/docking/save-config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    ligand_index: ligandIndex,
+                    content: content
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                // Show success message
+                const saveBtn = document.getElementById('save-vina-config-btn');
+                const originalText = saveBtn.innerHTML;
+                saveBtn.innerHTML = '<i class="fas fa-check"></i> Saved!';
+                saveBtn.classList.remove('btn-primary');
+                saveBtn.classList.add('btn-success');
+                saveBtn.disabled = true;
+                
+                setTimeout(() => {
+                    saveBtn.innerHTML = originalText;
+                    saveBtn.classList.remove('btn-success');
+                    saveBtn.classList.add('btn-primary');
+                    saveBtn.disabled = false;
+                }, 2000);
+            } else {
+                alert(`Error saving config: ${result.error}`);
+            }
+        } catch (error) {
+            console.error('Error saving config:', error);
+            alert(`Error saving config: ${error.message}`);
+        }
     }
 
     countAtomsInPDB(pdbContent) {
@@ -1583,7 +2051,8 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 fileItem.className = 'file-item';
                 fileItem.style.cssText = 'padding: 10px; margin: 5px 0; border: 1px solid #ddd; border-radius: 5px; cursor: pointer; background: #f9f9f9;';
                 fileItem.innerHTML = `<strong>${name}</strong>`;
-                fileItem.onclick = () => this.showFileContent(name, content);
+                // Use cache at click time so we show saved edits; closure over `content` would stay stale after save
+                fileItem.onclick = () => this.showFileContent(name, this.fileContents?.[name] ?? content);
                 filesList.appendChild(fileItem);
             });
             
@@ -1673,6 +2142,12 @@ echo "Analysis completed! Results saved in analysis/ directory"
             document.getElementById('cancel-edit-btn').onclick = () => {
                 this.exitEditMode(modal, true); // Restore original content
             };
+        }
+        
+        // Use cached content when available (e.g. after a save in this session) so the UI shows
+        // the latest version; the file list's onclick may still pass stale content from its closure.
+        if (this.fileContents && this.fileContents[filename] !== undefined) {
+            content = this.fileContents[filename];
         }
         
         // Store current filename and original content
@@ -2409,6 +2884,23 @@ echo "Analysis completed! Results saved in analysis/ directory"
             const result = await response.json();
 
             if (result.success) {
+                // Display ligand name changes if any
+                if (result.ligand_name_changes && result.ligand_name_changes.length > 0) {
+                    const changesList = result.ligand_name_changes.map(change => {
+                        const [oldName, newName, filename] = change;
+                        return `• Ligand "${oldName}" renamed to "${newName}" (in ${filename})`;
+                    }).join('\n');
+                    
+                    alert(
+                        `⚠️ Ligand Name Changes Detected\n\n` +
+                        `The following ligand names were changed because they were pure numeric:\n\n` +
+                        `${changesList}\n\n` +
+                        `tleap won't accept pure numeric names while loading ligand mol2 files. ` +
+                        `They have been converted to 3-letter codes (e.g., "478" → "L78"). ` +
+                        `The PDB files have been updated automatically.`
+                    );
+                }
+                
                 // Store prepared structure
                 this.preparedProtein = {
                     content: result.prepared_structure,
@@ -2466,8 +2958,17 @@ echo "Analysis completed! Results saved in analysis/ directory"
 
                 // Show ligand force field group if preserve ligands is checked
                 const preserveLigandsChecked = document.getElementById('preserve-ligands').checked;
+                const dockingSection = document.getElementById('docking-section');
                 if (preserveLigandsChecked && result.ligand_present) {
                     this.toggleLigandForceFieldGroup(true);
+                    if (dockingSection) {
+                        dockingSection.style.display = 'block';
+                        this.initializeDockingSetup(result.preserved_ligands || 0);
+                        // Store ligand info for selection
+                        this.dockingLigandCount = result.preserved_ligands || 0;
+                    }
+                } else if (dockingSection) {
+                    dockingSection.style.display = 'none';
                 }
             } else {
                 throw new Error(result.error || 'Structure preparation failed');
@@ -2478,6 +2979,1552 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 <p><i class="fas fa-exclamation-triangle"></i> Error preparing structure</p>
                 <p>${error.message}</p>
             `;
+        }
+    }
+
+    initializeDockingSetup(ligandCount) {
+        if (!ligandCount || ligandCount <= 0) return;
+
+        // Avoid re-rendering if already initialized
+        if (this.dockingSetupInitialized) return;
+
+        // Setup collapsible toggle
+        this.setupDockingToggle();
+
+        // Render ligand selection checkboxes
+        this.renderDockingLigandSelection(ligandCount);
+
+        const setupList = document.getElementById('docking-setup-list');
+        if (!setupList) return;
+
+        setupList.innerHTML = '';
+
+        // Use currently selected chains from structure-prep as the protein context
+        const chains = this.getSelectedChains();
+        const chainLabel = chains && chains.length > 0 ? chains.join(', ') : 'All selected chains';
+
+        for (let i = 1; i <= ligandCount; i++) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'docking-setup-entry';
+            wrapper.innerHTML = `
+                <div class="docking-setup-header">
+                    <label>
+                        <input type="checkbox" id="dock-lig${i}-enabled" checked>
+                        <strong>Ligand ${i}</strong>
+                    </label>
+                    <span class="docking-setup-chains">
+                        <i class="fas fa-link"></i> Protein chains used: ${chainLabel}
+                    </span>
+                </div>
+                <div class="docking-setup-body">
+                    <div class="docking-box-row">
+                        <div class="form-group">
+                            <label for="dock-lig${i}-center-x">Center X (Å):</label>
+                            <input type="number" id="dock-lig${i}-center-x" step="0.1">
+                        </div>
+                        <div class="form-group">
+                            <label for="dock-lig${i}-center-y">Center Y (Å):</label>
+                            <input type="number" id="dock-lig${i}-center-y" step="0.1">
+                        </div>
+                        <div class="form-group">
+                            <label for="dock-lig${i}-center-z">Center Z (Å):</label>
+                            <input type="number" id="dock-lig${i}-center-z" step="0.1">
+                        </div>
+                    </div>
+                    <div class="docking-box-row">
+                        <div class="form-group">
+                            <label for="dock-lig${i}-size-x">Size X (Å):</label>
+                            <input type="number" id="dock-lig${i}-size-x" value="10" step="0.5" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="dock-lig${i}-size-y">Size Y (Å):</label>
+                            <input type="number" id="dock-lig${i}-size-y" value="10" step="0.5" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="dock-lig${i}-size-z">Size Z (Å):</label>
+                            <input type="number" id="dock-lig${i}-size-z" value="10" step="0.5" min="1">
+                        </div>
+                    </div>
+                    <small class="form-help">
+                        Leave center fields empty to use the automatically computed center of the ligand.
+                    </small>
+                </div>
+            `;
+
+            setupList.appendChild(wrapper);
+        }
+
+        this.dockingSetupInitialized = true;
+
+        // Initialize docking visualization and fetch default boxes from backend
+        this.initializeDockingVisualization();
+        this.fetchInitialDockingBoxes(ligandCount);
+    }
+
+    setupDockingToggle() {
+        const toggleHeader = document.getElementById('docking-toggle-header');
+        const toggleIcon = document.getElementById('docking-toggle-icon');
+        const card = document.getElementById('docking-section');
+
+        if (toggleHeader && card) {
+            // Set as collapsed by default
+            let collapsed = true;
+            card.classList.add('collapsed');
+            toggleHeader.classList.add('collapsed');
+
+            toggleHeader.addEventListener('click', () => {
+                collapsed = !collapsed;
+                
+                if (collapsed) {
+                    card.classList.add('collapsed');
+                    toggleHeader.classList.add('collapsed');
+                } else {
+                    card.classList.remove('collapsed');
+                    toggleHeader.classList.remove('collapsed');
+                }
+            });
+        }
+        
+        // Setup inner collapsible for "Docking Search Space Setup"
+        this.setupDockingSetupCollapsible();
+    }
+    
+    setupDockingSetupCollapsible() {
+        const setupToggle = document.getElementById('docking-setup-toggle');
+        const setupContent = document.getElementById('docking-setup-content');
+        const setupIcon = document.getElementById('docking-setup-toggle-icon');
+        
+        if (!setupToggle || !setupContent) return;
+        
+        // Remove any existing listener to prevent duplicates
+        const newToggle = setupToggle.cloneNode(true);
+        setupToggle.parentNode.replaceChild(newToggle, setupToggle);
+        
+        // Get the new icon reference
+        const newIcon = document.getElementById('docking-setup-toggle-icon');
+        
+        let isExpanded = true; // Start expanded
+        
+        newToggle.addEventListener('click', () => {
+            isExpanded = !isExpanded;
+            
+            if (isExpanded) {
+                setupContent.style.display = 'block';
+                setupContent.style.maxHeight = 'none';
+                if (newIcon) {
+                    newIcon.style.transform = 'rotate(0deg)';
+                    newIcon.classList.remove('fa-chevron-down');
+                    newIcon.classList.add('fa-chevron-up');
+                }
+            } else {
+                setupContent.style.display = 'none';
+                if (newIcon) {
+                    newIcon.style.transform = 'rotate(180deg)';
+                    newIcon.classList.remove('fa-chevron-up');
+                    newIcon.classList.add('fa-chevron-down');
+                }
+            }
+        });
+    }
+
+    renderDockingLigandSelection(ligandCount) {
+        // This will be called again with full ligand info after API response
+        // For now, just show a loading message or placeholder
+        const container = document.getElementById('docking-ligand-selection');
+        if (!container) return;
+        
+        container.innerHTML = '<p style="color: #6c757d;"><i class="fas fa-spinner fa-spin"></i> Loading ligand information...</p>';
+    }
+    
+    renderDockingLigandSelectionWithInfo(ligands, chains) {
+        const container = document.getElementById('docking-ligand-selection');
+        if (!container) return;
+
+        container.innerHTML = '';
+        
+        // Store chains for later use
+        this.availableChains = chains || ['A'];
+
+        // Render each ligand with its name and chain selection
+        ligands.forEach((lig, idx) => {
+            const ligIndex = lig.index || (idx + 1);
+            const ligName = lig.name || `LIG${ligIndex}`;
+            const ligChain = lig.chain || 'A';
+            const fullLigandName = `${ligName}-${ligChain}`; // Format: PTR-A, PTR-B
+            
+            const wrapper = document.createElement('div');
+            wrapper.className = 'docking-ligand-row';
+            wrapper.style.cssText = 'display: flex; align-items: center; gap: 15px; margin-bottom: 10px; padding: 10px; background: #f8f9fa; border-radius: 5px; border: 1px solid #dee2e6;';
+            
+            // Ligand selection checkbox with full name (RESNAME-CHAIN format)
+            let html = `
+                <div style="flex: 0 0 120px;">
+                    <label class="checkbox-container" style="margin: 0; display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="dock-select-lig${ligIndex}" data-ligand-index="${ligIndex}" checked>
+                        <span class="checkmark"></span>
+                        <strong style="color: #6f42c1;">${fullLigandName}</strong>
+                    </label>
+                </div>
+                <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                    <span style="color: #495057; font-size: 0.9em; margin-right: 5px;"><i class="fas fa-link"></i> Dock with:</span>
+            `;
+            
+            // Chain selection checkboxes - compact inline style
+            // Pre-check the chain that the ligand belongs to
+            this.availableChains.forEach(chain => {
+                const isSameChain = chain === ligChain; // Pre-check the ligand's own chain
+                html += `
+                    <label style="display: inline-flex; align-items: center; gap: 3px; margin-right: 10px; cursor: pointer; font-size: 0.9em;">
+                        <input type="checkbox" id="dock-lig${ligIndex}-chain-${chain}" data-ligand="${ligIndex}" data-chain="${chain}" ${isSameChain ? 'checked' : ''} style="width: 14px; height: 14px; cursor: pointer;">
+                        <span style="color: #495057;">${chain}</span>
+                    </label>
+                `;
+            });
+            
+            html += '</div>';
+            wrapper.innerHTML = html;
+            container.appendChild(wrapper);
+        });
+
+        // Add listener to show/hide box controls based on selection
+        container.querySelectorAll('input[id^="dock-select-lig"]').forEach(cb => {
+            cb.addEventListener('change', () => {
+                this.updateDockingBoxControlsVisibility();
+                setTimeout(() => this.updateDockingVisualizationFromInputs(), 100);
+            });
+        });
+    }
+    
+    renderDockingBoxControls(ligands) {
+        const setupList = document.getElementById('docking-setup-list');
+        if (!setupList) return;
+        
+        setupList.innerHTML = '';
+        
+        // Box colors matching the 3D visualization (CSS format)
+        const boxColorsCss = [
+            '#ff0000',    // Red
+            '#00cc00',    // Green
+            '#0000ff',    // Blue
+            '#ff8000',    // Orange
+            '#cc00cc',    // Magenta
+            '#00cccc',    // Cyan
+        ];
+        
+        ligands.forEach((lig, idx) => {
+            const i = lig.index || (idx + 1);
+            const ligName = lig.name || `LIG${i}`;
+            const ligChain = lig.chain || 'A';
+            const fullLigandName = `${ligName}-${ligChain}`; // Format: PTR-A, PTR-B
+            const center = lig.center || { x: 0, y: 0, z: 0 };
+            const size = lig.size || { x: 10, y: 10, z: 10 };
+            const boxColor = boxColorsCss[idx % boxColorsCss.length];
+            
+            const entry = document.createElement('div');
+            entry.className = 'docking-setup-entry';
+            entry.style.cssText = 'flex: 0 0 calc(50% - 10px); min-width: 280px; background: white; padding: 12px; border-radius: 5px; border: 1px solid #dee2e6;';
+            
+            entry.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 8px;">
+                    <strong style="color: ${boxColor};"><i class="fas fa-cube"></i> ${fullLigandName}</strong>
+                    <label class="toggle-switch" style="margin: 0;">
+                        <input type="checkbox" id="dock-lig${i}-enabled" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 0.85em;">
+                    <div>
+                        <label style="color: #6c757d; font-size: 0.8em; display: block; margin-bottom: 2px;">Center X (Å)</label>
+                        <input type="number" step="0.1" id="dock-lig${i}-center-x" value="${center.x?.toFixed(2) || 0}" 
+                               style="width: 100%; padding: 4px 6px; border: 1px solid #ced4da; border-radius: 3px; font-size: 0.9em;">
+                    </div>
+                    <div>
+                        <label style="color: #6c757d; font-size: 0.8em; display: block; margin-bottom: 2px;">Size X (Å)</label>
+                        <input type="number" step="0.5" min="1" id="dock-lig${i}-size-x" value="${size.x || 10}" 
+                               style="width: 100%; padding: 4px 6px; border: 1px solid #ced4da; border-radius: 3px; font-size: 0.9em;">
+                    </div>
+                    <div>
+                        <label style="color: #6c757d; font-size: 0.8em; display: block; margin-bottom: 2px;">Center Y (Å)</label>
+                        <input type="number" step="0.1" id="dock-lig${i}-center-y" value="${center.y?.toFixed(2) || 0}" 
+                               style="width: 100%; padding: 4px 6px; border: 1px solid #ced4da; border-radius: 3px; font-size: 0.9em;">
+                    </div>
+                    <div>
+                        <label style="color: #6c757d; font-size: 0.8em; display: block; margin-bottom: 2px;">Size Y (Å)</label>
+                        <input type="number" step="0.5" min="1" id="dock-lig${i}-size-y" value="${size.y || 10}" 
+                               style="width: 100%; padding: 4px 6px; border: 1px solid #ced4da; border-radius: 3px; font-size: 0.9em;">
+                    </div>
+                    <div>
+                        <label style="color: #6c757d; font-size: 0.8em; display: block; margin-bottom: 2px;">Center Z (Å)</label>
+                        <input type="number" step="0.1" id="dock-lig${i}-center-z" value="${center.z?.toFixed(2) || 0}" 
+                               style="width: 100%; padding: 4px 6px; border: 1px solid #ced4da; border-radius: 3px; font-size: 0.9em;">
+                    </div>
+                    <div>
+                        <label style="color: #6c757d; font-size: 0.8em; display: block; margin-bottom: 2px;">Size Z (Å)</label>
+                        <input type="number" step="0.5" min="1" id="dock-lig${i}-size-z" value="${size.z || 10}" 
+                               style="width: 100%; padding: 4px 6px; border: 1px solid #ced4da; border-radius: 3px; font-size: 0.9em;">
+                    </div>
+                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee;">
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="mdPipeline.openVinaConfigEditor(${i})" style="width: 100%; font-size: 0.85em;">
+                            <i class="fas fa-cog"></i> Edit Vina Config File
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            setupList.appendChild(entry);
+        });
+        
+        // Attach listeners for live updates
+        ligands.forEach((lig, idx) => {
+            const i = lig.index || (idx + 1);
+            ['center-x', 'center-y', 'center-z', 'size-x', 'size-y', 'size-z', 'enabled'].forEach(suffix => {
+                const el = document.getElementById(`dock-lig${i}-${suffix}`);
+                if (el) {
+                    el.addEventListener('input', () => {
+                        setTimeout(() => {
+                            this.updateDockingVisualizationFromInputs();
+                            // Update config file if it's a size or center change
+                            if (suffix.includes('size') || suffix.includes('center')) {
+                                this.updateConfigFileFromGUI(i);
+                            }
+                        }, 50);
+                    });
+                    el.addEventListener('change', () => {
+                        setTimeout(() => {
+                            this.updateDockingVisualizationFromInputs();
+                            // Update config file if it's a size or center change
+                            if (suffix.includes('size') || suffix.includes('center')) {
+                                this.updateConfigFileFromGUI(i);
+                            }
+                        }, 50);
+                    });
+                }
+            });
+        });
+        
+        // Update visibility based on ligand selection
+        this.updateDockingBoxControlsVisibility();
+    }
+
+    updateDockingBoxControlsVisibility() {
+        const setupList = document.getElementById('docking-setup-list');
+        if (!setupList) return;
+
+        const entries = setupList.querySelectorAll('.docking-setup-entry');
+        entries.forEach(entry => {
+            const enabledInput = entry.querySelector('input[id^="dock-lig"][id$="-enabled"]');
+            if (!enabledInput) return;
+            
+            const ligIndex = enabledInput.id.match(/\d+/)?.[0];
+            if (!ligIndex) return;
+
+            const selectCheckbox = document.getElementById(`dock-select-lig${ligIndex}`);
+            if (selectCheckbox) {
+                // Use flex display when visible to maintain horizontal layout
+                entry.style.display = selectCheckbox.checked ? 'block' : 'none';
+            }
+        });
+    }
+
+    async initializeDockingVisualization() {
+        if (!this.preparedProtein) return;
+
+        try {
+            // Initialize docking-specific NGL stage if not already done
+            if (!this.dockingStage) {
+                this.dockingStage = new NGL.Stage("docking-ngl-viewer", {
+                    backgroundColor: "white",
+                    quality: "medium"
+                });
+            }
+
+            // Clear existing components
+            this.dockingStage.removeAllComponents();
+
+            // Create a blob from prepared PDB content (tleap_ready.pdb)
+            const blob = new Blob([this.preparedProtein.content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+
+            // Load the structure
+            const component = await this.dockingStage.loadFile(url, {
+                ext: "pdb",
+                defaultRepresentation: false
+            });
+            
+            // Store reference to the structure component for box attachment
+            this.dockingStructureComponent = component;
+
+            // Protein cartoon with consistent chain colors
+            const structureChains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                // Use consistent chain colors from chainColorMap
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        component.addRepresentation("cartoon", {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.8
+                        });
+                    }
+                });
+            } else {
+                // Fallback: use chainid if color map not available
+                component.addRepresentation("cartoon", {
+                    sele: "protein",
+                    colorScheme: "chainid",
+                    opacity: 0.8
+                });
+            }
+
+            // Ligands as ball+stick
+            component.addRepresentation("ball+stick", {
+                sele: "hetero",
+                radius: 0.2,
+                color: "element"
+            });
+
+            this.dockingStage.autoView();
+
+            URL.revokeObjectURL(url);
+            
+            // After structure is loaded, render boxes if we have defaults
+            setTimeout(() => {
+                if (this.dockingBoxDefaults) {
+                    this.updateDockingVisualizationFromInputs();
+                }
+            }, 500);
+        } catch (err) {
+            console.error('Error initializing docking visualization:', err);
+        }
+    }
+
+    async fetchInitialDockingBoxes(ligandCount) {
+        try {
+            const response = await fetch('/api/docking/get-ligand-boxes');
+            const result = await response.json();
+            if (!result.success) {
+                console.warn('Failed to fetch default ligand boxes:', result.error);
+                return;
+            }
+
+            // Store defaults and ligand info for later use
+            this.dockingBoxDefaults = {};
+            this.dockingLigandInfo = result.ligands || [];
+            this.availableChains = result.chains || ['A'];
+            
+            (result.ligands || []).forEach(lig => {
+                this.dockingBoxDefaults[lig.index] = lig;
+            });
+
+            // Render ligand selection with actual names and chain options
+            this.renderDockingLigandSelectionWithInfo(result.ligands || [], result.chains || []);
+            
+            // Render box controls for each ligand (compact horizontal layout)
+            this.renderDockingBoxControls(result.ligands || []);
+            
+            // Wait a bit for DOM to update and stage to be ready, then render boxes
+            setTimeout(() => {
+                console.log('Rendering docking boxes after fetching defaults...');
+                this.updateDockingVisualizationFromInputs();
+            }, 300);
+        } catch (err) {
+            console.error('Error fetching initial docking boxes:', err);
+        }
+    }
+
+    updateDockingVisualizationFromInputs() {
+        if (!this.dockingStage) {
+            console.warn('Docking stage not initialized');
+            return;
+        }
+
+        // Remove previous THREE.js box objects (groups with cylinders and spheres)
+        if (this.dockingBoxObjects && this.dockingBoxObjects.length > 0) {
+            this.dockingBoxObjects.forEach(obj => {
+                try {
+                    // Remove from parent (modelGroup, rotationGroup, component, or scene)
+                    if (obj.parent) {
+                        obj.parent.remove(obj);
+                    }
+                    // Dispose of all children's geometries and materials
+                    if (obj.children) {
+                        obj.children.forEach(child => {
+                            if (child.geometry) child.geometry.dispose();
+                            if (child.material) child.material.dispose();
+                        });
+                    }
+                    // Also dispose if it's a single object
+                    if (obj.geometry) obj.geometry.dispose();
+                    if (obj.material) obj.material.dispose();
+                } catch (e) {
+                    console.warn('Could not remove previous box object:', e);
+                }
+            });
+        }
+        this.dockingBoxObjects = [];
+        
+        // Get the structure component's THREE.js object for proper rotation
+        // Boxes attached to this will rotate with the molecule
+        const structureObject = this.dockingStructureComponent ? 
+            this.dockingStructureComponent.object : null;
+            
+        // Debug: Check all relevant positions in NGL's hierarchy
+        let structureCenter = { x: 0, y: 0, z: 0 };
+        const viewer = this.dockingStage.viewer;
+        
+        if (this.dockingStructureComponent && this.dockingStructureComponent.structure) {
+            const center = this.dockingStructureComponent.structure.center;
+            if (center) {
+                structureCenter = { x: center.x, y: center.y, z: center.z };
+                console.log(`Structure center: (${center.x.toFixed(2)}, ${center.y.toFixed(2)}, ${center.z.toFixed(2)})`);
+            }
+        }
+        
+        // Log positions of NGL viewer groups
+        if (viewer.rotationGroup) {
+            const rg = viewer.rotationGroup;
+            console.log(`rotationGroup position: (${rg.position.x.toFixed(2)}, ${rg.position.y.toFixed(2)}, ${rg.position.z.toFixed(2)})`);
+        }
+        if (viewer.translationGroup) {
+            const tg = viewer.translationGroup;
+            console.log(`translationGroup position: (${tg.position.x.toFixed(2)}, ${tg.position.y.toFixed(2)}, ${tg.position.z.toFixed(2)})`);
+        }
+        if (viewer.modelGroup) {
+            const mg = viewer.modelGroup;
+            console.log(`modelGroup position: (${mg.position.x.toFixed(2)}, ${mg.position.y.toFixed(2)}, ${mg.position.z.toFixed(2)})`);
+        }
+
+        const setupList = document.getElementById('docking-setup-list');
+        if (!setupList) {
+            console.warn('Docking setup list not found');
+            return;
+        }
+
+        const entries = setupList.querySelectorAll('.docking-setup-entry');
+        if (entries.length === 0) {
+            console.warn('No docking setup entries found');
+            return;
+        }
+
+        let boxCount = 0;
+        
+        // Colors for different ligands (hex values)
+        const boxColors = [
+            0xff0000,    // Red
+            0x00cc00,    // Green
+            0x0000ff,    // Blue
+            0xff8000,    // Orange
+            0xcc00cc,    // Magenta
+            0x00cccc,    // Cyan
+        ];
+
+        // Get THREE.js - NGL bundles it internally
+        // Access through the viewer's scene constructor or global
+        let THREE = window.THREE;
+        if (!THREE) {
+            // Try to get THREE from NGL's internal references
+            const scene = this.dockingStage.viewer.scene;
+            if (scene && scene.constructor) {
+                // Get THREE from the scene's constructor context
+                THREE = {
+                    BoxGeometry: scene.constructor.prototype.constructor.BoxGeometry || window.BoxGeometry,
+                    EdgesGeometry: scene.constructor.prototype.constructor.EdgesGeometry || window.EdgesGeometry,
+                    LineSegments: scene.constructor.prototype.constructor.LineSegments || window.LineSegments,
+                    LineBasicMaterial: scene.constructor.prototype.constructor.LineBasicMaterial || window.LineBasicMaterial,
+                    BufferGeometry: scene.constructor.prototype.constructor.BufferGeometry || window.BufferGeometry,
+                    Float32BufferAttribute: scene.constructor.prototype.constructor.Float32BufferAttribute || window.Float32BufferAttribute,
+                    Line: scene.constructor.prototype.constructor.Line || window.Line
+                };
+            }
+        }
+        
+        // If THREE still not available, try to load it dynamically or use fallback
+        if (!THREE || !THREE.BoxGeometry) {
+            console.warn('THREE.js not fully available, using manual line drawing fallback');
+            this.renderDockingBoxesFallback(entries, boxColors);
+            return;
+        }
+
+        entries.forEach((entry, idx) => {
+            const ligIndex = idx + 1;
+            
+            // Check if this ligand is selected for docking
+            const selectCheckbox = document.getElementById(`dock-select-lig${ligIndex}`);
+            if (selectCheckbox && !selectCheckbox.checked) {
+                console.log(`Ligand ${ligIndex} not selected, skipping box`);
+                return;
+            }
+
+            const enabledEl = entry.querySelector(`#dock-lig${ligIndex}-enabled`);
+            if (enabledEl && !enabledEl.checked) {
+                console.log(`Ligand ${ligIndex} disabled, skipping box`);
+                return;
+            }
+
+            const cxEl = entry.querySelector(`#dock-lig${ligIndex}-center-x`);
+            const cyEl = entry.querySelector(`#dock-lig${ligIndex}-center-y`);
+            const czEl = entry.querySelector(`#dock-lig${ligIndex}-center-z`);
+            const sxEl = entry.querySelector(`#dock-lig${ligIndex}-size-x`);
+            const syEl = entry.querySelector(`#dock-lig${ligIndex}-size-y`);
+            const szEl = entry.querySelector(`#dock-lig${ligIndex}-size-z`);
+
+            let cx = cxEl && cxEl.value !== '' ? parseFloat(cxEl.value) : null;
+            let cy = cyEl && cyEl.value !== '' ? parseFloat(cyEl.value) : null;
+            let cz = czEl && czEl.value !== '' ? parseFloat(czEl.value) : null;
+
+            let sx = sxEl && sxEl.value !== '' ? parseFloat(sxEl.value) : 10.0;
+            let sy = syEl && syEl.value !== '' ? parseFloat(syEl.value) : 10.0;
+            let sz = szEl && szEl.value !== '' ? parseFloat(szEl.value) : 10.0;
+
+            // If center is not specified, try to get from backend defaults
+            if (cx == null || cy == null || cz == null) {
+                if (this.dockingBoxDefaults && this.dockingBoxDefaults[ligIndex]) {
+                    const def = this.dockingBoxDefaults[ligIndex];
+                    cx = def.center?.x || null;
+                    cy = def.center?.y || null;
+                    cz = def.center?.z || null;
+                    console.log(`Using default center for ligand ${ligIndex}:`, {cx, cy, cz});
+                }
+                if (cx == null || cy == null || cz == null) {
+                    console.warn(`No center available for ligand ${ligIndex}, skipping box`);
+                    return;
+                }
+            }
+
+            // Ensure all values are numbers
+            if (isNaN(cx) || isNaN(cy) || isNaN(cz) || isNaN(sx) || isNaN(sy) || isNaN(sz)) {
+                console.warn(`Invalid box parameters for ligand ${ligIndex}:`, {cx, cy, cz, sx, sy, sz});
+                return;
+            }
+
+            const color = boxColors[(ligIndex - 1) % boxColors.length];
+            
+            // Debug: Log the coordinates being used
+            console.log(`Box ${ligIndex} params: center=(${cx.toFixed(2)}, ${cy.toFixed(2)}, ${cz.toFixed(2)}), size=(${sx}, ${sy}, ${sz})`);
+
+            try {
+                // Create thick wireframe box using cylinders for each edge
+                // This works in all browsers (unlike linewidth which only works in WebGL1)
+                
+                const tubeRadius = 0.15; // Thickness of the box edges
+                const radialSegments = 6; // Segments for cylinder smoothness
+                
+                // Calculate box corners
+                const halfX = sx / 2;
+                const halfY = sy / 2;
+                const halfZ = sz / 2;
+                
+                // Define 8 corners of the box (relative to center)
+                const corners = [
+                    new THREE.Vector3(-halfX, -halfY, -halfZ), // 0
+                    new THREE.Vector3(+halfX, -halfY, -halfZ), // 1
+                    new THREE.Vector3(+halfX, +halfY, -halfZ), // 2
+                    new THREE.Vector3(-halfX, +halfY, -halfZ), // 3
+                    new THREE.Vector3(-halfX, -halfY, +halfZ), // 4
+                    new THREE.Vector3(+halfX, -halfY, +halfZ), // 5
+                    new THREE.Vector3(+halfX, +halfY, +halfZ), // 6
+                    new THREE.Vector3(-halfX, +halfY, +halfZ)  // 7
+                ];
+                
+                // Define 12 edges as pairs of corner indices
+                const edgePairs = [
+                    [0, 1], [1, 2], [2, 3], [3, 0], // bottom face
+                    [4, 5], [5, 6], [6, 7], [7, 4], // top face
+                    [0, 4], [1, 5], [2, 6], [3, 7]  // vertical edges
+                ];
+                
+                // Material for the tubes
+                const tubeMaterial = new THREE.MeshBasicMaterial({
+                    color: color,
+                    transparent: true,
+                    opacity: 0.9
+                });
+                
+                // Create a group to hold all edge cylinders
+                const boxGroup = new THREE.Group();
+                boxGroup.position.set(cx, cy, cz);
+                
+                // Create cylinder for each edge
+                edgePairs.forEach(([i1, i2]) => {
+                    const start = corners[i1];
+                    const end = corners[i2];
+                    
+                    // Calculate edge properties
+                    const direction = new THREE.Vector3().subVectors(end, start);
+                    const length = direction.length();
+                    const midpoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+                    
+                    // Create cylinder geometry (default orientation is along Y-axis)
+                    const cylinderGeom = new THREE.CylinderGeometry(tubeRadius, tubeRadius, length, radialSegments);
+                    const cylinder = new THREE.Mesh(cylinderGeom, tubeMaterial.clone());
+                    
+                    // Position at midpoint
+                    cylinder.position.copy(midpoint);
+                    
+                    // Orient cylinder along the edge direction
+                    // Default cylinder is along Y-axis, so we need to rotate it to align with edge
+                    const yAxis = new THREE.Vector3(0, 1, 0);
+                    const edgeDir = direction.clone().normalize();
+                    
+                    // Calculate quaternion to rotate from Y-axis to edge direction
+                    const quaternion = new THREE.Quaternion();
+                    quaternion.setFromUnitVectors(yAxis, edgeDir);
+                    cylinder.setRotationFromQuaternion(quaternion);
+                    
+                    boxGroup.add(cylinder);
+                });
+                
+                // Add corner spheres for a nicer look
+                const sphereGeom = new THREE.SphereGeometry(tubeRadius * 1.2, 8, 8);
+                corners.forEach(corner => {
+                    const sphere = new THREE.Mesh(sphereGeom, tubeMaterial);
+                    sphere.position.copy(corner);
+                    boxGroup.add(sphere);
+                });
+                
+                // Add to NGL's modelGroup - this is where structures are actually placed
+                // This ensures boxes are in the same coordinate space as the molecule
+                const modelGroup = this.dockingStage.viewer.modelGroup;
+                const rotationGroup = this.dockingStage.viewer.rotationGroup;
+                
+                if (modelGroup) {
+                    modelGroup.add(boxGroup);
+                    console.log(`Added box ${ligIndex} to modelGroup at (${cx.toFixed(2)}, ${cy.toFixed(2)}, ${cz.toFixed(2)})`);
+                } else if (rotationGroup) {
+                    rotationGroup.add(boxGroup);
+                    console.log(`Added box ${ligIndex} to rotationGroup`);
+                } else if (structureObject) {
+                    structureObject.add(boxGroup);
+                    console.log(`Added box ${ligIndex} to structureObject`);
+                } else {
+                    this.dockingStage.viewer.scene.add(boxGroup);
+                    console.log(`Added box ${ligIndex} to scene`);
+                }
+                this.dockingBoxObjects.push(boxGroup);
+                
+                boxCount++;
+                console.log(`✅ Added thick box for ligand ${ligIndex} at (${cx.toFixed(2)}, ${cy.toFixed(2)}, ${cz.toFixed(2)}) with size (${sx}, ${sy}, ${sz})`);
+                
+            } catch (e) {
+                console.error(`Error creating wireframe for ligand ${ligIndex}:`, e);
+            }
+        });
+
+        // Request render update to show the boxes
+        if (boxCount > 0) {
+            this.dockingStage.viewer.requestRender();
+            console.log(`✅ Rendered ${boxCount} docking box(es) in visualization`);
+        } else {
+            console.warn('⚠️ No boxes to render - check ligand selection and center values');
+        }
+    }
+
+    // Fallback method for rendering docking boxes when THREE.js isn't directly accessible
+    renderDockingBoxesFallback(entries, boxColors) {
+        console.log('Using fallback docking box visualization');
+        let boxCount = 0;
+        
+        // Try to access THREE through different paths
+        const viewer = this.dockingStage.viewer;
+        const scene = viewer.scene;
+        
+        // Check various ways THREE might be available
+        let ThreeLib = null;
+        
+        // Method 1: Check if it's on window after NGL loaded
+        if (typeof THREE !== 'undefined') {
+            ThreeLib = THREE;
+        }
+        // Method 2: Check NGL's internal module system
+        else if (typeof NGL !== 'undefined' && NGL.Stage) {
+            // NGL exports some THREE objects
+            // Try to construct THREE objects using scene's prototype chain
+            const sceneProto = Object.getPrototypeOf(scene);
+            if (sceneProto && sceneProto.constructor) {
+                const mod = sceneProto.constructor;
+                // Check if we can find THREE in the module's scope
+                console.log('Scene constructor:', mod.name);
+            }
+        }
+        
+        // If we still can't get THREE, create a simple HTML overlay as fallback
+        if (!ThreeLib) {
+            console.log('Creating HTML overlay for docking boxes');
+            entries.forEach((entry, idx) => {
+                const ligIndex = idx + 1;
+                
+                const selectCheckbox = document.getElementById(`dock-select-lig${ligIndex}`);
+                if (selectCheckbox && !selectCheckbox.checked) return;
+
+                const cxEl = entry.querySelector(`#dock-lig${ligIndex}-center-x`);
+                const cyEl = entry.querySelector(`#dock-lig${ligIndex}-center-y`);
+                const czEl = entry.querySelector(`#dock-lig${ligIndex}-center-z`);
+                const sxEl = entry.querySelector(`#dock-lig${ligIndex}-size-x`);
+                const syEl = entry.querySelector(`#dock-lig${ligIndex}-size-y`);
+                const szEl = entry.querySelector(`#dock-lig${ligIndex}-size-z`);
+
+                let cx = cxEl && cxEl.value !== '' ? parseFloat(cxEl.value) : null;
+                let cy = cyEl && cyEl.value !== '' ? parseFloat(cyEl.value) : null;
+                let cz = czEl && czEl.value !== '' ? parseFloat(czEl.value) : null;
+                let sx = sxEl && sxEl.value !== '' ? parseFloat(sxEl.value) : 10.0;
+                let sy = syEl && syEl.value !== '' ? parseFloat(syEl.value) : 10.0;
+                let sz = szEl && szEl.value !== '' ? parseFloat(szEl.value) : 10.0;
+
+                if (cx == null || cy == null || cz == null) {
+                    if (this.dockingBoxDefaults && this.dockingBoxDefaults[ligIndex]) {
+                        const def = this.dockingBoxDefaults[ligIndex];
+                        cx = def.center?.x || 0;
+                        cy = def.center?.y || 0;
+                        cz = def.center?.z || 0;
+                    }
+                }
+
+                if (cx != null && cy != null && cz != null) {
+                    boxCount++;
+                    console.log(`📦 Docking box ${ligIndex}: center (${cx.toFixed(2)}, ${cy.toFixed(2)}, ${cz.toFixed(2)}), size (${sx}×${sy}×${sz}) Å`);
+                }
+            });
+            
+            // Update status to show box info since we can't render visually
+            const statusEl = document.getElementById('docking-status');
+            if (statusEl && boxCount > 0) {
+                statusEl.innerHTML = `<span style="color: #28a745;">✓ ${boxCount} docking box(es) configured (visual preview not available)</span>`;
+            }
+            return;
+        }
+        
+        // If ThreeLib is available, use it
+        entries.forEach((entry, idx) => {
+            const ligIndex = idx + 1;
+            
+            const selectCheckbox = document.getElementById(`dock-select-lig${ligIndex}`);
+            if (selectCheckbox && !selectCheckbox.checked) return;
+
+            const cxEl = entry.querySelector(`#dock-lig${ligIndex}-center-x`);
+            const cyEl = entry.querySelector(`#dock-lig${ligIndex}-center-y`);
+            const czEl = entry.querySelector(`#dock-lig${ligIndex}-center-z`);
+            const sxEl = entry.querySelector(`#dock-lig${ligIndex}-size-x`);
+            const syEl = entry.querySelector(`#dock-lig${ligIndex}-size-y`);
+            const szEl = entry.querySelector(`#dock-lig${ligIndex}-size-z`);
+
+            let cx = cxEl && cxEl.value !== '' ? parseFloat(cxEl.value) : null;
+            let cy = cyEl && cyEl.value !== '' ? parseFloat(cyEl.value) : null;
+            let cz = czEl && czEl.value !== '' ? parseFloat(czEl.value) : null;
+            let sx = sxEl && sxEl.value !== '' ? parseFloat(sxEl.value) : 10.0;
+            let sy = syEl && syEl.value !== '' ? parseFloat(syEl.value) : 10.0;
+            let sz = szEl && szEl.value !== '' ? parseFloat(szEl.value) : 10.0;
+
+            if (cx == null || cy == null || cz == null) {
+                if (this.dockingBoxDefaults && this.dockingBoxDefaults[ligIndex]) {
+                    const def = this.dockingBoxDefaults[ligIndex];
+                    cx = def.center?.x || 0;
+                    cy = def.center?.y || 0;
+                    cz = def.center?.z || 0;
+                }
+            }
+
+            if (cx == null || cy == null || cz == null) return;
+            
+            const color = boxColors[(ligIndex - 1) % boxColors.length];
+            
+            try {
+                const geometry = new ThreeLib.BoxGeometry(sx, sy, sz);
+                const edges = new ThreeLib.EdgesGeometry(geometry);
+                const material = new ThreeLib.LineBasicMaterial({ color: color });
+                const wireframe = new ThreeLib.LineSegments(edges, material);
+                wireframe.position.set(cx, cy, cz);
+                scene.add(wireframe);
+                this.dockingBoxObjects.push(wireframe);
+                geometry.dispose();
+                boxCount++;
+            } catch (e) {
+                console.error(`Fallback: Error creating box for ligand ${ligIndex}:`, e);
+            }
+        });
+        
+        if (boxCount > 0) {
+            viewer.requestRender();
+            console.log(`✅ Fallback rendered ${boxCount} docking box(es)`);
+        }
+    }
+
+    async runDocking() {
+        if (!this.preparedProtein || !this.preparedProtein.ligand_present) {
+            alert('Please prepare a structure with preserved ligands before running docking.');
+            return;
+        }
+
+        // Get selected ligands for docking
+        const selectedLigands = [];
+        const selectionContainer = document.getElementById('docking-ligand-selection');
+        if (selectionContainer) {
+            selectionContainer.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
+                const ligIndex = parseInt(cb.getAttribute('data-ligand-index'));
+                if (ligIndex) selectedLigands.push(ligIndex);
+            });
+        }
+
+        if (selectedLigands.length === 0) {
+            alert('Please select at least one ligand to dock.');
+            return;
+        }
+
+        const setupList = document.getElementById('docking-setup-list');
+        const statusEl = document.getElementById('docking-status');
+        const posesContainer = document.getElementById('docking-poses-container');
+        const posesList = document.getElementById('docking-poses-list');
+
+        // Build per-ligand configuration from setup rows, only for selected ligands
+        const ligandConfigs = [];
+        if (setupList) {
+            const entries = setupList.querySelectorAll('.docking-setup-entry');
+            entries.forEach((entry, idx) => {
+                const ligIndex = idx + 1;
+                
+                // Check if this ligand is selected for docking
+                const selectCheckbox = document.getElementById(`dock-select-lig${ligIndex}`);
+                if (!selectCheckbox || !selectCheckbox.checked) return;
+
+                const enabledEl = entry.querySelector(`#dock-lig${ligIndex}-enabled`);
+                const cxEl = entry.querySelector(`#dock-lig${ligIndex}-center-x`);
+                const cyEl = entry.querySelector(`#dock-lig${ligIndex}-center-y`);
+                const czEl = entry.querySelector(`#dock-lig${ligIndex}-center-z`);
+                const sxEl = entry.querySelector(`#dock-lig${ligIndex}-size-x`);
+                const syEl = entry.querySelector(`#dock-lig${ligIndex}-size-y`);
+                const szEl = entry.querySelector(`#dock-lig${ligIndex}-size-z`);
+
+                const enabled = enabledEl ? enabledEl.checked : true;
+                const center = {};
+                const size = {};
+
+                if (cxEl && cxEl.value !== '') center.x = parseFloat(cxEl.value);
+                if (cyEl && cyEl.value !== '') center.y = parseFloat(cyEl.value);
+                if (czEl && czEl.value !== '') center.z = parseFloat(czEl.value);
+
+                if (sxEl && sxEl.value !== '') size.x = parseFloat(sxEl.value);
+                if (syEl && syEl.value !== '') size.y = parseFloat(syEl.value);
+                if (szEl && szEl.value !== '') size.z = parseFloat(szEl.value);
+
+                ligandConfigs.push({
+                    index: ligIndex,
+                    enabled,
+                    center,
+                    size,
+                });
+            });
+        }
+
+        // Show loading state
+        const runDockingBtn = document.getElementById('run-docking');
+        const originalText = runDockingBtn ? runDockingBtn.innerHTML : '';
+        if (runDockingBtn) {
+            runDockingBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running...';
+            runDockingBtn.disabled = true;
+        }
+
+        // Initialize log storage if not exists
+        if (!this.dockingLogs) {
+            this.dockingLogs = [];
+        }
+        this.dockingLogs = []; // Clear previous logs
+        this.dockingRunning = true; // Flag to track if docking is in progress
+
+        // Create or get log modal
+        let logModal = document.getElementById('docking-log-modal');
+        if (!logModal) {
+            logModal = this.createDockingLogModal();
+            document.body.appendChild(logModal);
+        }
+
+        // Show modal and render stored logs
+        const logContent = logModal.querySelector('.log-content');
+        const logContainer = logModal.querySelector('.log-container');
+        this.renderDockingLogs(logContent);
+        logModal.style.display = 'block';
+        logContainer.scrollTop = logContainer.scrollHeight;
+
+        // Add "View Logs" button next to the run button
+        this.addViewDockingLogsButton(runDockingBtn);
+
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Running docking for preserved ligands...`;
+        }
+        if (posesContainer) {
+            posesContainer.style.display = 'none';
+        }
+
+        try {
+            const response = await fetch('/api/docking/run', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ ligands: ligandConfigs }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep incomplete line in buffer
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            
+                            if (data.type === 'complete') {
+                                // Final result
+                                this.dockingRunning = false;
+                                if (data.success) {
+                                    this.dockingLogs.push({ type: 'result', data: data });
+                                    this.displayDockingFinalResult(data, logContent);
+                                    this.dockingResults = data;
+                                    
+                                    if (statusEl) {
+                                        const warnings = (data.warnings || []).filter(w => w && w.length > 0);
+                                        const errors = (data.errors || []).filter(e => e && e.length > 0);
+                                        const parts = ['<i class="fas fa-check-circle"></i> Docking completed.'];
+                                        if (warnings.length > 0) {
+                                            parts.push(`<br><strong>Warnings:</strong><br>${warnings.join('<br>')}`);
+                                        }
+                                        if (errors.length > 0) {
+                                            parts.push(`<br><strong>Errors:</strong><br>${errors.join('<br>')}`);
+                                        }
+                                        statusEl.innerHTML = parts.join('');
+                                    }
+
+                                    if (posesContainer && posesList) {
+                                        const ligands = data.ligands || [];
+                                        console.log('Docking completed, ligands:', ligands);
+                                        
+                                        // IMPORTANT: Show the container FIRST so NGL viewer has dimensions
+                                        posesContainer.style.display = 'block';
+                                        
+                                        if (ligands.length === 0) {
+                                            posesList.innerHTML = '<small>No docking poses were generated.</small>';
+                                        } else {
+                                            // Small delay to ensure DOM has updated with visible dimensions
+                                            await new Promise(resolve => setTimeout(resolve, 100));
+                                            // Initialize the poses viewer
+                                            await this.initializePosesViewer(ligands);
+                                        }
+                                    }
+                                } else {
+                                    this.dockingLogs.push({ type: 'error', message: `❌ Error: ${data.error}` });
+                                    this.addLogLine(logContent, `❌ Error: ${data.error}`, 'error');
+                                    if (statusEl) {
+                                        statusEl.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Error: ${data.error}`;
+                                    }
+                                }
+                                if (runDockingBtn) {
+                                    runDockingBtn.innerHTML = originalText;
+                                    runDockingBtn.disabled = false;
+                                }
+                                this.removeViewDockingLogsButton();
+                            } else {
+                                // Log message - store and display
+                                this.dockingLogs.push({ type: data.type || 'info', message: data.message, timestamp: new Date().toISOString() });
+                                // Only add to DOM if modal is visible
+                                const currentLogModal = document.getElementById('docking-log-modal');
+                                if (currentLogModal && currentLogModal.style.display === 'block') {
+                                    const currentLogContent = currentLogModal.querySelector('.log-content');
+                                    if (currentLogContent) {
+                                        this.addLogLine(currentLogContent, data.message, data.type || 'info');
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Error parsing SSE data:', e);
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Error running docking:', err);
+            this.dockingRunning = false;
+            const errorMsg = `❌ Error: Failed to run docking. ${err.message}`;
+            this.dockingLogs.push({ type: 'error', message: errorMsg });
+            this.addLogLine(logContent, errorMsg, 'error');
+            if (statusEl) {
+                statusEl.innerHTML = `
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Error running docking: ${err.message}
+                `;
+            }
+            if (runDockingBtn) {
+                runDockingBtn.innerHTML = originalText;
+                runDockingBtn.disabled = false;
+            }
+            this.removeViewDockingLogsButton();
+        }
+    }
+
+    async initializePosesViewer(ligands) {
+        console.log('Initializing poses viewer with ligands:', ligands);
+        
+        // Store ligands data for navigation
+        this.posesViewerLigands = ligands;
+        this.currentPoseLigandIndex = 0;
+        this.currentPoseIndex = 0; // 0 = original, 1+ = docked poses
+        
+        // Ligand colors for tabs
+        const ligandColors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7', '#dfe6e9'];
+        
+        // Render ligand tabs
+        const tabsContainer = document.getElementById('docking-ligand-tabs');
+        if (tabsContainer) {
+            tabsContainer.innerHTML = ligands.map((lig, idx) => {
+                const color = ligandColors[idx % ligandColors.length];
+                const ligName = lig.name || `Ligand ${lig.index}`;
+                return `
+                    <div class="docking-ligand-tab ${idx === 0 ? 'active' : ''}" 
+                         data-ligand-idx="${idx}" 
+                         style="--tab-color: ${color}">
+                        <span class="ligand-color-dot" style="background: ${color}"></span>
+                        ${ligName}
+                    </div>
+                `;
+            }).join('');
+            
+            // Tab click handlers
+            tabsContainer.querySelectorAll('.docking-ligand-tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    const ligIdx = parseInt(tab.getAttribute('data-ligand-idx'));
+                    this.switchPosesLigand(ligIdx);
+                });
+            });
+        }
+        
+        // Render selection radio buttons
+        const posesList = document.getElementById('docking-poses-list');
+        if (posesList) {
+            posesList.innerHTML = `
+                <h5><i class="fas fa-check-circle"></i> Select Pose for Each Ligand</h5>
+                ${ligands.map((lig, idx) => {
+                    const poses = lig.poses || [];
+                    const ligName = lig.name || `Ligand ${lig.index}`;
+                    const color = ligandColors[idx % ligandColors.length];
+                    return `
+                        <div class="pose-selection-row" data-ligand-idx="${idx}">
+                            <span class="pose-selection-label" style="color: ${color}; font-weight: 600;">
+                                ${ligName}
+                            </span>
+                            <div class="pose-selection-options">
+                                <label class="pose-selection-option">
+                                    <input type="radio" name="ligand-${lig.index}-pose" value="original" 
+                                           data-ligand-index="${lig.index}" checked>
+                                    Original
+                                </label>
+                                ${poses.map(p => {
+                                    const energy = p.energy;
+                                    const energyStr = (energy != null && !isNaN(energy) && energy !== 0) 
+                                        ? `<span class="pose-selection-energy">(${energy.toFixed(1)} kcal/mol)</span>` 
+                                        : '';
+                                    return `
+                                        <label class="pose-selection-option">
+                                            <input type="radio" name="ligand-${lig.index}-pose" 
+                                                   value="${p.mode_index}" data-ligand-index="${lig.index}">
+                                            Mode ${p.mode_index} ${energyStr}
+                                        </label>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            `;
+        }
+        
+        // Setup navigation buttons
+        const prevBtn = document.getElementById('pose-prev-btn');
+        const nextBtn = document.getElementById('pose-next-btn');
+        
+        if (prevBtn) {
+            prevBtn.onclick = () => this.navigatePose(-1);
+        }
+        if (nextBtn) {
+            nextBtn.onclick = () => this.navigatePose(1);
+        }
+        
+        // Initialize the 3D viewer and wait for it to be ready
+        await this.initializePosesNGLStage();
+        
+        // Load the first ligand's original pose after stage is ready
+        await this.loadCurrentPose();
+    }
+    
+    async initializePosesNGLStage() {
+        console.log('Initializing poses NGL stage...');
+        const viewerEl = document.getElementById('docking-poses-viewer');
+        if (!viewerEl) {
+            console.error('Poses viewer element not found!');
+            return;
+        }
+        
+        console.log('Viewer element found:', viewerEl, 'Size:', viewerEl.offsetWidth, 'x', viewerEl.offsetHeight);
+        
+        // Dispose existing stage if any
+        if (this.posesStage) {
+            this.posesStage.dispose();
+            this.posesStage = null;
+        }
+        
+        // Create new NGL stage
+        this.posesStage = new NGL.Stage(viewerEl, {
+            backgroundColor: 'white',
+            quality: 'medium'
+        });
+        console.log('NGL stage created');
+        
+        // Load the protein structure via API
+        try {
+            console.log('Fetching protein structure...');
+            const response = await fetch('/api/docking/get-protein');
+            const result = await response.json();
+            
+            if (!result.success) {
+                console.error('Failed to load protein:', result.error);
+                return;
+            }
+            
+            console.log('Protein content length:', result.content.length);
+            
+            // Create blob from PDB content
+            const blob = new Blob([result.content], { type: 'text/plain' });
+            const proteinComponent = await this.posesStage.loadFile(blob, { ext: 'pdb' });
+            console.log('Protein loaded into NGL');
+            
+            // Show protein as cartoon with consistent chain colors
+            const structureChains = (this.currentProtein && this.currentProtein.chains) ? this.currentProtein.chains : [];
+            
+            if (this.chainColorMap && Object.keys(this.chainColorMap).length > 0) {
+                // Use consistent chain colors from chainColorMap
+                structureChains.forEach((chain) => {
+                    if (this.chainColorMap[chain]) {
+                        proteinComponent.addRepresentation('cartoon', {
+                            sele: `:${chain}`,
+                            color: this.chainColorMap[chain],
+                            opacity: 0.9
+                        });
+                    }
+                });
+            } else {
+                // Fallback: use chainid if color map not available
+                proteinComponent.addRepresentation('cartoon', {
+                    colorScheme: 'chainid',
+                    opacity: 0.9
+                });
+            }
+            
+            this.posesProteinComponent = proteinComponent;
+            
+            // Load the original ligand (always visible in green)
+            await this.loadOriginalLigandForPoses();
+            
+            this.posesStage.autoView();
+            console.log('Protein and original ligand loaded, autoView called');
+        } catch (err) {
+            console.error('Error loading protein for poses viewer:', err);
+        }
+    }
+    
+    async loadOriginalLigandForPoses() {
+        const ligand = this.posesViewerLigands[this.currentPoseLigandIndex];
+        if (!ligand) return;
+        
+        try {
+            // Remove previous original ligand if switching ligands
+            if (this.posesOriginalLigandComponent) {
+                this.posesStage.removeComponent(this.posesOriginalLigandComponent);
+                this.posesOriginalLigandComponent = null;
+            }
+            
+            // Fetch the original ligand
+            const params = new URLSearchParams();
+            params.set('ligand_index', ligand.index);
+            params.set('type', 'original');
+            
+            const response = await fetch(`/api/docking/get-structure?${params.toString()}`);
+            const result = await response.json();
+            
+            if (!result.success) {
+                console.error('Failed to load original ligand:', result.error);
+                return;
+            }
+            
+            // Load the original ligand (green, always visible)
+            const blob = new Blob([result.content], { type: 'text/plain' });
+            const ligandComponent = await this.posesStage.loadFile(blob, { ext: 'pdb' });
+            
+            ligandComponent.addRepresentation('ball+stick', {
+                colorValue: 0x00ff00, // Green for original
+                multipleBond: 'symmetric',
+                opacity: 0.8
+            });
+            
+            this.posesOriginalLigandComponent = ligandComponent;
+            console.log('Original ligand loaded (green)');
+        } catch (err) {
+            console.error('Error loading original ligand:', err);
+        }
+    }
+    
+    async switchPosesLigand(ligandIdx) {
+        this.currentPoseLigandIndex = ligandIdx;
+        this.currentPoseIndex = 0; // Reset to original
+        
+        // Update tab active state
+        const tabs = document.querySelectorAll('.docking-ligand-tab');
+        tabs.forEach((tab, idx) => {
+            tab.classList.toggle('active', idx === ligandIdx);
+        });
+        
+        // Remove previous docked pose overlay
+        if (this.posesDockedComponent) {
+            this.posesStage.removeComponent(this.posesDockedComponent);
+            this.posesDockedComponent = null;
+        }
+        
+        // Reload original ligand for the new ligand
+        await this.loadOriginalLigandForPoses();
+        
+        // AutoView when switching ligands to center on new ligand
+        this.posesStage.autoView(500);
+        
+        // Load current pose state
+        await this.loadCurrentPose();
+    }
+    
+    navigatePose(direction) {
+        const ligand = this.posesViewerLigands[this.currentPoseLigandIndex];
+        if (!ligand) return;
+        
+        const poses = ligand.poses || [];
+        const totalPoses = 1 + poses.length; // original + docked poses
+        
+        this.currentPoseIndex += direction;
+        
+        // Wrap around
+        if (this.currentPoseIndex < 0) {
+            this.currentPoseIndex = totalPoses - 1;
+        } else if (this.currentPoseIndex >= totalPoses) {
+            this.currentPoseIndex = 0;
+        }
+        
+        this.loadCurrentPose();
+    }
+    
+    async loadCurrentPose() {
+        const ligand = this.posesViewerLigands[this.currentPoseLigandIndex];
+        if (!ligand) return;
+        
+        const poses = ligand.poses || [];
+        const isOriginal = this.currentPoseIndex === 0;
+        
+        // Update info display
+        const modeLabel = document.getElementById('pose-mode-label');
+        const energyLabel = document.getElementById('pose-energy-label');
+        
+        if (isOriginal) {
+            if (modeLabel) modeLabel.textContent = 'Original Ligand Only';
+            if (energyLabel) energyLabel.textContent = '(No docked pose overlay)';
+        } else {
+            const pose = poses[this.currentPoseIndex - 1];
+            if (pose) {
+                if (modeLabel) modeLabel.textContent = `Binding Mode ${pose.mode_index}`;
+                if (energyLabel) {
+                    const energy = pose.energy;
+                    energyLabel.textContent = (energy != null && !isNaN(energy) && energy !== 0) 
+                        ? `ΔG = ${energy.toFixed(2)} kcal/mol` 
+                        : '';
+                }
+            }
+        }
+        
+        // Update navigation button states
+        const prevBtn = document.getElementById('pose-prev-btn');
+        const nextBtn = document.getElementById('pose-next-btn');
+        const totalPoses = 1 + poses.length;
+        
+        // Enable/disable based on available poses (but allow wrap-around)
+        if (prevBtn) prevBtn.disabled = totalPoses <= 1;
+        if (nextBtn) nextBtn.disabled = totalPoses <= 1;
+        
+        // Remove previous docked pose overlay (original ligand stays)
+        if (this.posesDockedComponent) {
+            this.posesStage.removeComponent(this.posesDockedComponent);
+            this.posesDockedComponent = null;
+        }
+        
+        // If showing original only, no overlay needed
+        if (isOriginal) {
+            // Update the radio button selection
+            this.syncPoseSelectionRadio();
+            return;
+        }
+        
+        // Load the docked pose overlay
+        try {
+            const pose = poses[this.currentPoseIndex - 1];
+            
+            // Fetch the docked pose PDB content
+            const params = new URLSearchParams();
+            params.set('ligand_index', ligand.index);
+            params.set('type', 'pose');
+            params.set('mode_index', pose.mode_index);
+            
+            const response = await fetch(`/api/docking/get-structure?${params.toString()}`);
+            const result = await response.json();
+            
+            if (!result.success) {
+                console.error('Failed to load pose:', result.error);
+                return;
+            }
+            
+            // Load the docked pose into the viewer (coral/red color)
+            const blob = new Blob([result.content], { type: 'text/plain' });
+            const dockedComponent = await this.posesStage.loadFile(blob, { ext: 'pdb' });
+            
+            dockedComponent.addRepresentation('ball+stick', {
+                colorValue: 0xff6b6b, // Coral for docked poses
+                multipleBond: 'symmetric'
+            });
+            
+            this.posesDockedComponent = dockedComponent;
+            
+            // DON'T call autoView() - preserve user's camera position/zoom
+            
+            // Update the radio button selection
+            this.syncPoseSelectionRadio();
+            
+        } catch (err) {
+            console.error('Error loading docked pose:', err);
+        }
+    }
+    
+    syncPoseSelectionRadio() {
+        const ligand = this.posesViewerLigands[this.currentPoseLigandIndex];
+        if (!ligand) return;
+        
+        const poses = ligand.poses || [];
+        const isOriginal = this.currentPoseIndex === 0;
+        
+        // Find and check the corresponding radio button
+        const value = isOriginal ? 'original' : poses[this.currentPoseIndex - 1]?.mode_index;
+        const radio = document.querySelector(`input[name="ligand-${ligand.index}-pose"][value="${value}"]`);
+        
+        if (radio) {
+            radio.checked = true;
+        }
+    }
+
+    async applyDockingPoses() {
+        if (!this.dockingResults || !Array.isArray(this.dockingResults.ligands)) {
+            alert('Please run docking first.');
+            return;
+        }
+
+        const posesList = document.getElementById('docking-poses-list');
+        if (!posesList) return;
+
+        const selections = [];
+        this.dockingResults.ligands.forEach(lig => {
+            const ligId = lig.index;
+            const selected = posesList.querySelector(`input[name="ligand-${ligId}-pose"]:checked`);
+            if (!selected) return;
+            const value = selected.value;
+            if (value === 'original') {
+                selections.push({
+                    ligand_index: ligId,
+                    choice: 'original',
+                });
+            } else {
+                const modeIndex = parseInt(value, 10);
+                if (modeIndex > 0) {
+                    selections.push({
+                        ligand_index: ligId,
+                        choice: 'mode',
+                        mode_index: modeIndex,
+                    });
+                }
+            }
+        });
+
+        if (selections.length === 0) {
+            alert('No docking pose selections found.');
+            return;
+        }
+
+        const applyBtn = document.getElementById('apply-docking-poses');
+        const originalBtnContent = applyBtn ? applyBtn.innerHTML : '';
+        
+        // Show spinner on button
+        if (applyBtn) {
+            applyBtn.disabled = true;
+            applyBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying...';
+        }
+
+        const statusEl = document.getElementById('docking-status');
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Applying selected docking poses...`;
+        }
+
+        try {
+            const response = await fetch('/api/docking/apply', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ selections }),
+            });
+            const result = await response.json();
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to apply docking poses');
+            }
+
+            // Restore button
+            if (applyBtn) {
+                applyBtn.disabled = false;
+                applyBtn.innerHTML = originalBtnContent;
+            }
+
+            if (statusEl) {
+                statusEl.innerHTML = `
+                    <i class="fas fa-check-circle"></i>
+                    Docking poses applied successfully. Updated ligands: ${
+                        (result.updated_ligands || []).join(', ') || 'none'
+                    }.
+                `;
+            }
+        } catch (err) {
+            console.error('Error applying docking poses:', err);
+            
+            // Restore button on error
+            if (applyBtn) {
+                applyBtn.disabled = false;
+                applyBtn.innerHTML = originalBtnContent;
+            }
+            
+            if (statusEl) {
+                statusEl.innerHTML = `
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Error applying docking poses: ${err.message}
+                `;
+            }
         }
     }
 
@@ -2518,6 +4565,20 @@ echo "Analysis completed! Results saved in analysis/ directory"
                             ${key}
                         </label>`;
                     ligandContainer.appendChild(wrapper);
+                    
+                    // Add event listener to automatically check "Preserve ligands" when ligand is clicked
+                    const checkbox = document.getElementById(id);
+                    if (checkbox) {
+                        checkbox.addEventListener('change', (e) => {
+                            if (e.target.checked) {
+                                const preserveLigandsCheckbox = document.getElementById('preserve-ligands');
+                                if (preserveLigandsCheckbox && !preserveLigandsCheckbox.checked) {
+                                    preserveLigandsCheckbox.checked = true;
+                                    preserveLigandsCheckbox.dispatchEvent(new Event('change'));
+                                }
+                            }
+                        });
+                    }
                 });
             } else {
                 // Fallback: show unique ligand names if detailed positions not parsed
@@ -2533,6 +4594,20 @@ echo "Analysis completed! Results saved in analysis/ directory"
                                 ${resn}
                             </label>`;
                         ligandContainer.appendChild(wrapper);
+                        
+                        // Add event listener to automatically check "Preserve ligands" when ligand is clicked
+                        const checkbox = document.getElementById(id);
+                        if (checkbox) {
+                            checkbox.addEventListener('change', (e) => {
+                                if (e.target.checked) {
+                                    const preserveLigandsCheckbox = document.getElementById('preserve-ligands');
+                                    if (preserveLigandsCheckbox && !preserveLigandsCheckbox.checked) {
+                                        preserveLigandsCheckbox.checked = true;
+                                        preserveLigandsCheckbox.dispatchEvent(new Event('change'));
+                                    }
+                                }
+                            });
+                        }
                     });
                 } else {
                     ligandContainer.innerHTML = '<small>No ligands detected</small>';
@@ -2853,6 +4928,37 @@ echo "Analysis completed! Results saved in analysis/ directory"
             `;
             container.appendChild(wrapper);
         });
+
+        // Show and populate minimization section
+        const minSection = document.getElementById('chain-minimization-section');
+        const minChainsList = document.getElementById('minimization-chains-list');
+        const minCheckboxes = document.getElementById('minimization-chains-checkboxes');
+        
+        if (minSection && minChainsList && minCheckboxes) {
+            minSection.style.display = 'block';
+            minCheckboxes.innerHTML = '';
+            
+            chainsWithMissing.forEach(chain => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'checkbox-inline';
+                wrapper.innerHTML = `
+                    <label class="checkbox-container">
+                        <input type="checkbox" id="min-chain-${chain}" data-chain="${chain}" checked>
+                        <span class="checkmark"></span>
+                        Chain ${chain}
+                    </label>
+                `;
+                minCheckboxes.appendChild(wrapper);
+            });
+            
+            // Show chain selection when minimize checkbox is checked
+            const minimizeCheckbox = document.getElementById('minimize-chains-checkbox');
+            if (minimizeCheckbox) {
+                minimizeCheckbox.addEventListener('change', (e) => {
+                    minChainsList.style.display = e.target.checked ? 'block' : 'none';
+                });
+            }
+        }
 
         // Update button state based on selections
         this.updateBuildButtonState();
@@ -3590,6 +5696,24 @@ echo "Analysis completed! Results saved in analysis/ directory"
             return;
         }
 
+        // Get minimization preference
+        const minimizeCheckbox = document.getElementById('minimize-chains-checkbox');
+        const minimizeChains = minimizeCheckbox ? minimizeCheckbox.checked : false;
+        let chainsToMinimize = [];
+        
+        if (minimizeChains) {
+            // Get selected chains for minimization
+            const minContainer = document.getElementById('minimization-chains-checkboxes');
+            if (minContainer) {
+                chainsToMinimize = Array.from(minContainer.querySelectorAll('input[type="checkbox"]:checked'))
+                    .map(cb => cb.getAttribute('data-chain'));
+            }
+            // If no specific chains selected, minimize all
+            if (chainsToMinimize.length === 0) {
+                chainsToMinimize = selectedChains;
+            }
+        }
+
         const buildBtn = document.getElementById('build-complete-structure');
         const originalText = buildBtn.innerHTML;
         buildBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Building...';
@@ -3598,7 +5722,9 @@ echo "Analysis completed! Results saved in analysis/ directory"
         try {
             // Prepare request body with optional trimmed sequences
             const requestBody = {
-                selected_chains: selectedChains
+                selected_chains: selectedChains,
+                minimize_chains: minimizeChains,
+                chains_to_minimize: chainsToMinimize
             };
             
             // Include trimmed sequences if available (they may have been trimmed)
@@ -3615,6 +5741,9 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 }
             }
 
+            // Show log modal for ESMFold/minimization
+            this.showESMFoldLogModal();
+            
             const response = await fetch('/api/build-completed-structure', {
                 method: 'POST',
                 headers: {
@@ -3623,20 +5752,56 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 body: JSON.stringify(requestBody)
             });
 
-            const result = await response.json();
+            // Handle streaming response
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalResult = null;
 
-            if (result.success) {
-                this.completedProtein = {
-                    content: result.completed_structure,
-                    completed_chains: result.completed_chains
-                };
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
 
-                this.showMissingStatus('success', result.message);
-                document.getElementById('preview-completed-structure').disabled = false;
-                document.getElementById('preview-superimposed-structure').disabled = false;
-                document.getElementById('download-completed-structure').disabled = false;
-            } else {
-                throw new Error(result.error || 'Failed to build completed structure');
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep incomplete line in buffer
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            
+                            if (data.type === 'complete') {
+                                finalResult = data;
+                            } else if (data.message) {
+                                // Add log line
+                                this.addESMFoldLogLine(data.message, data.type || 'info');
+                            }
+                        } catch (e) {
+                            console.error('Error parsing SSE data:', e);
+                        }
+                    }
+                }
+            }
+
+            // Handle final result
+            if (finalResult) {
+                if (finalResult.success) {
+                    this.completedProtein = {
+                        content: finalResult.completed_structure,
+                        completed_chains: finalResult.completed_chains
+                    };
+
+                    this.showMissingStatus('success', finalResult.message);
+                    document.getElementById('preview-completed-structure').disabled = false;
+                    document.getElementById('preview-superimposed-structure').disabled = false;
+                    document.getElementById('download-completed-structure').disabled = false;
+                    
+                    // Automatically set preference to use completed structure since user selected these chains
+                    await this.saveUseCompletedStructurePreference(true, finalResult.completed_chains);
+                } else {
+                    throw new Error(finalResult.error || 'Failed to build completed structure');
+                }
             }
         } catch (error) {
             console.error('Error building completed structure:', error);
@@ -3644,6 +5809,33 @@ echo "Analysis completed! Results saved in analysis/ directory"
         } finally {
             buildBtn.innerHTML = originalText;
             buildBtn.disabled = false;
+        }
+    }
+
+    async saveUseCompletedStructurePreference(useCompleted, completedChains = null) {
+        try {
+            const response = await fetch('/api/set-use-completed-structure', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    use_completed: useCompleted
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                const chainsList = completedChains ? completedChains.join(', ') : '';
+                if (useCompleted && chainsList) {
+                    console.log(`ESMFold-completed chain(s) (${chainsList}) will be used in structure preparation and docking.`);
+                }
+            } else {
+                console.error('Error setting use completed structure preference:', result.error);
+            }
+        } catch (error) {
+            console.error('Error setting use completed structure preference:', error);
         }
     }
 

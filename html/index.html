@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="../css/styles.css">
     <link rel="stylesheet" href="../css/plumed.css">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- THREE.js (needed for docking box visualization) - using r95 to match NGL's bundled version -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r95/three.min.js"></script>
     <!-- NGL 3D Molecular Viewer -->
     <script src="https://unpkg.com/ngl@2.0.0-dev.35/dist/ngl.js"></script>
 </head>
@@ -135,9 +137,6 @@
                     <div class="prep-sections">
                         <div class="prep-section">
                             <h3><i class="fas fa-search"></i> Detect Missing Residues</h3>
-                            <p class="option-description">
-                                This step parses the PDB header (REMARK 465) to identify chains with missing residues.
-                            </p>
                             <button class="btn btn-primary" id="detect-missing-residues">
                                 <i class="fas fa-search"></i> Analyze Missing Residues
                             </button>
@@ -176,6 +175,29 @@
                             <i class="fas fa-check"></i> Apply Trimming
                         </button>
                         <div id="trim-status" class="status-message" style="margin-top: 10px; display: none;"></div>
+                    </div>
+
+                    <!-- Chain Minimization Option -->
+                    <div class="prep-section" id="chain-minimization-section" style="display: none; margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px; border: 1px solid #dee2e6;">
+                        <h3><i class="fas fa-compress-arrows-alt"></i> Energy Minimization (Optional)</h3>
+                        <p class="option-description">
+                            Energy minimize ESMFold-generated chains to resolve clashes and disulfide bond issues that may cause docking errors.
+                        </p>
+                        <div class="form-check" style="display: flex; align-items: center; gap: 10px; margin-top: 10px;">
+                            <input class="form-check-input" type="checkbox" id="minimize-chains-checkbox" style="width: 20px; height: 20px; cursor: pointer;">
+                            <label class="form-check-label" for="minimize-chains-checkbox" style="cursor: pointer; font-weight: 500; flex: 1;">
+                                <strong>Energy minimize ESMFold-generated chains</strong>
+                            </label>
+                        </div>
+                        <small class="form-text text-muted" style="display: block; margin-top: 8px; margin-left: 30px;">
+                            <i class="fas fa-info-circle"></i> Recommended if you encounter receptor preparation errors during docking. Minimization resolves structural clashes and improves compatibility with docking tools.
+                        </small>
+                        <div id="minimization-chains-list" style="display: none; margin-top: 15px; margin-left: 30px;">
+                            <strong>Select chains to minimize:</strong>
+                            <div id="minimization-chains-checkboxes" class="multi-checkbox-group" style="margin-top: 10px;">
+                                <!-- Chain checkboxes will be populated here -->
+                            </div>
+                        </div>
                     </div>
 
                     <div class="prep-actions">
@@ -456,6 +478,114 @@
                                             <i class="fas fa-sync"></i> Spin
                                         </button>
                                     </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Docking Section (visible only when ligands are preserved and present) -->
+                    <div class="card plumed-section-card" id="docking-section" style="display: none; margin-top: 20px;">
+                        <h2 class="plumed-toggle-header" id="docking-toggle-header">
+                            <i class="fas fa-vial"></i> Ligand Docking
+                            <i class="fas fa-chevron-down toggle-icon" id="docking-toggle-icon"></i>
+                        </h2>
+                        <p class="section-description">
+                            Configure docking for preserved ligands using AutoDock Vina and Meeko. Select which ligands to dock,
+                            define the Vina bounding box with live visualization, then run docking and choose poses.
+                        </p>
+                        <div class="custom-plumed-section" id="docking-content-section">
+                            <!-- Ligand Selection -->
+                            <div class="form-group" style="margin-bottom: 20px;">
+                                <label><i class="fas fa-pills"></i> Select Ligands to Dock</label>
+                                <p class="option-description" style="margin-bottom: 10px;">
+                                    Choose which preserved ligands should be included in docking calculations.
+                                </p>
+                                <div id="docking-ligand-selection" class="multi-checkbox-group">
+                                    <!-- Ligand checkboxes will be rendered here -->
+                                </div>
+                            </div>
+
+                            <!-- Collapsible: Docking Setup (Visualization + Box Dimensions) -->
+                            <div class="docking-setup-collapsible" style="margin-top: 10px; border: 1px solid #dee2e6; border-radius: 8px; overflow: hidden;">
+                                <div class="docking-setup-header" id="docking-setup-toggle" style="background: linear-gradient(135deg, #6f42c1 0%, #8e5dd4 100%); color: white; padding: 12px 15px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;">
+                                    <span><i class="fas fa-cube"></i> Docking Search Space Setup</span>
+                                    <i class="fas fa-chevron-up" id="docking-setup-toggle-icon" style="transition: transform 0.3s ease;"></i>
+                                </div>
+                                <div class="docking-setup-content" id="docking-setup-content" style="padding: 15px; background: white;">
+                                    <!-- Docking Search Space Visualization -->
+                                    <div class="prepared-structure-preview" id="docking-structure-preview">
+                                        <h4 style="margin-top: 0;"><i class="fas fa-eye"></i> Search Space Visualization</h4>
+                                        <p class="card-description" style="margin-bottom: 10px;">
+                                            The protein–ligand system is shown below. For each selected ligand, a bounding box (10×10×10 Å by default)
+                                            represents the Vina search space. Adjust box dimensions below to update the visualization live.
+                                        </p>
+                                        <!-- NGL Viewer - Matching section 2 aspect ratio -->
+                                        <div id="docking-ngl-viewer" class="molecule-viewer" style="border: 2px solid #6f42c1; border-radius: 5px; width: 100%; max-width: 700px; height: 500px; position: relative; margin: 0 auto;">
+                                            <!-- Docking NGL visualization will be added here -->
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Box Dimensions - Below Visualization -->
+                                    <div id="docking-box-controls" style="margin-top: 15px; background: #f8f9fa; padding: 15px; border-radius: 5px; border: 1px solid #dee2e6;">
+                                        <h5 style="margin-top: 0; margin-bottom: 15px;"><i class="fas fa-sliders-h"></i> Box Dimensions for Selected Ligands</h5>
+                                        <div id="docking-setup-list" style="display: flex; flex-wrap: wrap; gap: 15px;">
+                                            <!-- Per-ligand box controls will be rendered here in a horizontal layout -->
+                                        </div>
+                                    </div>
+
+                                    <div class="prep-actions" style="margin-top: 15px;">
+                                        <button class="btn btn-primary" id="run-docking">
+                                            <i class="fas fa-vial"></i> Run Docking with Above Settings
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="docking-status" class="status-message" style="display: none; margin-top: 10px;"></div>
+                            
+                            <div id="docking-poses-container" style="display: none; margin-top: 20px;">
+                                <h4><i class="fas fa-project-diagram"></i> Visualize Binding Poses</h4>
+                                <p class="option-description">
+                                    Browse through docked poses for each ligand. Use the navigation arrows to view different binding modes.
+                                    Select your preferred pose for the simulation.
+                                </p>
+                                
+                                <!-- Ligand selector tabs -->
+                                <div id="docking-ligand-tabs" class="docking-ligand-tabs">
+                                    <!-- Ligand tabs will be rendered here -->
+                                </div>
+                                
+                                <!-- 3D Viewer with pose navigation -->
+                                <div class="docking-poses-viewer-wrapper">
+                                    <div id="docking-poses-viewer" class="docking-poses-viewer"></div>
+                                    
+                                    <!-- Pose navigation controls overlay -->
+                                    <div class="pose-nav-controls">
+                                        <button type="button" class="pose-nav-btn pose-nav-prev" id="pose-prev-btn" title="Previous Pose">
+                                            <i class="fas fa-chevron-left"></i>
+                                        </button>
+                                        <div class="pose-info-display">
+                                            <div class="pose-mode-label" id="pose-mode-label">Original Ligand</div>
+                                            <div class="pose-energy-label" id="pose-energy-label"></div>
+                                            <div class="pose-color-legend">
+                                                <span><span class="legend-dot original"></span> Original (green)</span>
+                                                <span><span class="legend-dot docked"></span> Docked (coral)</span>
+                                            </div>
+                                        </div>
+                                        <button type="button" class="pose-nav-btn pose-nav-next" id="pose-next-btn" title="Next Pose">
+                                            <i class="fas fa-chevron-right"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Pose selection summary -->
+                                <div id="docking-poses-list" class="docking-poses-selection">
+                                    <!-- Radio buttons for final selection will be rendered here -->
+                                </div>
+                                
+                                <div class="prep-actions" style="margin-top: 15px;">
+                                    <button class="btn btn-success" id="apply-docking-poses">
+                                        <i class="fas fa-check"></i> Use Selected Pose
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -1006,7 +1136,7 @@
                     <pre id="pdb-content" style="display: none; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.4; background: #f8f9fa; padding: 15px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;"></pre>
                 </div>
             </div>
-        </div>
+    </div>
 
     <script src="../js/script.js"></script>
     <script src="../js/plumed_cv_docs.js"></script>

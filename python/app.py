@@ -13,10 +13,18 @@ import zipfile
 from pathlib import Path
 import requests
 import subprocess
+import time
 from Bio.PDB import PDBParser, PDBList
 import logging
 import html
-from structure_preparation import prepare_structure, parse_structure_info
+from structure_preparation import (
+    prepare_structure,
+    parse_structure_info,
+    extract_original_residue_info,
+    restore_residue_info_in_pdb,
+    sanity_check_ligand_pdb,
+    merge_protein_and_ligand,
+)
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from Fill_missing_residues import (
@@ -68,6 +76,867 @@ def clean_and_create_output_folder():
         print(f"DEBUG: Error in cleanup: {str(e)}")
         logger.error(f"Error cleaning output folder: {str(e)}")
         return False
+
+
+def _ensure_docking_folder():
+    """Ensure the docking output folder exists and return its Path."""
+    docking_dir = OUTPUT_DIR / "docking"
+    docking_dir.mkdir(parents=True, exist_ok=True)
+    return docking_dir
+
+
+def _minimize_esmfold_chains_streaming(pdb_id, chains_to_minimize, original_for_align=None):
+    """
+    Minimize ESMFold-generated chains using AMBER with streaming logs.
+    Yields log messages in real-time.
+    After removing hydrogens, the minimized chain is superimposed to the
+    original (true crystal) structure so it stays in the same coordinate
+    frame as the ligand and the rest of the system.
+
+    Args:
+        pdb_id: PDB ID (e.g., '1KE5')
+        chains_to_minimize: List of chain IDs to minimize (e.g., ['A', 'B'])
+        original_for_align: Path to the true original PDB for superimposition.
+            Use 0_original_input_backup.pdb when it exists (true crystal),
+            else 0_original_input.pdb. If None, this is computed automatically.
+
+    Yields:
+        Log messages as formatted SSE strings
+    """
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if original_for_align is None:
+        backup = OUTPUT_DIR / "0_original_input_backup.pdb"
+        original_for_align = backup if backup.exists() else (OUTPUT_DIR / "0_original_input.pdb")
+    
+    for chain in chains_to_minimize:
+        try:
+            yield _format_log(f"  Preparing minimization for chain {chain}...")
+            
+            # Step 1: Prepare tleap input file (all minimization files in output/, not docking/)
+            esmfold_pdb = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold.pdb"
+            if not esmfold_pdb.exists():
+                yield _format_log(f"  ❌ ESMFold PDB not found for chain {chain}: {esmfold_pdb}", 'error')
+                continue
+            
+            tleap_in = OUTPUT_DIR / f"tleap_{chain}.in"
+            with open(tleap_in, 'w') as f:
+                f.write("source leaprc.protein.ff14SB\n")
+                f.write(f"protein = loadpdb {esmfold_pdb.resolve()}\n")
+                f.write(f"saveamberparm protein {pdb_id}_chain_{chain}_esmfold.prmtop {pdb_id}_chain_{chain}_esmfold.inpcrd\n")
+                f.write("quit\n")
+            
+            # Step 2: Run tleap
+            yield _format_log(f"  Running tleap for chain {chain}...")
+            prmtop = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold.prmtop"
+            inpcrd = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold.inpcrd"
+            
+            if not prmtop.exists() or not inpcrd.exists():
+                cmd = ["tleap", "-f", str(tleap_in)]
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=str(OUTPUT_DIR),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1
+                )
+                
+                for line in iter(process.stdout.readline, ''):
+                    if line.strip():
+                        yield _format_log(f"    {line.strip()}")
+                
+                process.wait()
+                if process.returncode != 0 or not prmtop.exists():
+                    yield _format_log(f"  ❌ tleap failed for chain {chain}", 'error')
+                    continue
+            
+            yield _format_log(f"  ✅ tleap completed for chain {chain}")
+            
+            # Step 3: Prepare min.in file
+            min_in = OUTPUT_DIR / f"min_{chain}.in"
+            with open(min_in, 'w') as f:
+                f.write("#Two-stage minimization: sidechains first\n")
+                f.write(" &cntrl\n")
+                f.write("  imin=1, maxcyc=300, ncyc=150,\n")
+                f.write("  ntb=0, cut=10.0, igb=1\n")
+                f.write(" /\n")
+            
+            # Step 4: Run sander minimization and stream min_*.out in real-time
+            yield _format_log(f"  Running energy minimization (sander) for chain {chain}...")
+            min_out = OUTPUT_DIR / f"min_{chain}.out"
+            min_rst = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold_minimized.rst"
+            
+            cmd = [
+                "sander",
+                "-O",
+                "-i", str(min_in),
+                "-o", str(min_out),
+                "-p", str(prmtop),
+                "-c", str(inpcrd),
+                "-r", str(min_rst)
+            ]
+            
+            # sander writes to -o file, not stdout: tail min_*.out in real-time
+            process = subprocess.Popen(
+                cmd,
+                cwd=str(OUTPUT_DIR),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            
+            # Wait for min_*.out to be created
+            for _ in range(100):
+                if min_out.exists():
+                    break
+                time.sleep(0.1)
+            
+            last_pos = 0
+            buffer = ""
+            while True:
+                if min_out.exists():
+                    try:
+                        with open(min_out, "r") as f:
+                            f.seek(last_pos)
+                            new = f.read()
+                            last_pos = f.tell()
+                        buffer += new
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+                            if line.strip():
+                                yield _format_log(f"    {line.strip()}")
+                    except (IOError, OSError):
+                        pass
+                
+                ret = process.poll()
+                if ret is not None:
+                    # Read any remaining output
+                    if min_out.exists():
+                        try:
+                            with open(min_out, "r") as f:
+                                f.seek(last_pos)
+                                new = f.read()
+                            buffer += new
+                            while "\n" in buffer:
+                                line, buffer = buffer.split("\n", 1)
+                                if line.strip():
+                                    yield _format_log(f"    {line.strip()}")
+                            if buffer.strip():
+                                yield _format_log(f"    {buffer.strip()}")
+                        except (IOError, OSError):
+                            pass
+                    break
+                time.sleep(0.2)
+            
+            process.wait()
+            if process.returncode != 0 and process.stderr:
+                err = process.stderr.read()
+                if err.strip():
+                    yield _format_log(f"    stderr: {err.strip()}", "error")
+            
+            if process.returncode != 0 or not min_rst.exists():
+                yield _format_log(f"  ❌ sander minimization failed for chain {chain}", 'error')
+                continue
+            
+            yield _format_log(f"  ✅ Minimization completed for chain {chain}")
+            
+            # Step 5: Convert back to PDB using ambpdb
+            yield _format_log(f"  Converting minimized structure to PDB (ambpdb) for chain {chain}...")
+            min_pdb = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold_minimized.pdb"
+            with open(min_pdb, 'w') as f:
+                cmd = [
+                    "ambpdb",
+                    "-p", str(prmtop),
+                    "-c", str(min_rst)
+                ]
+                result = subprocess.run(
+                    cmd,
+                    stdout=f,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            
+            if result.returncode != 0 or not min_pdb.exists():
+                yield _format_log(f"  ❌ ambpdb failed for chain {chain}: {result.stderr}", 'error')
+                continue
+            
+            yield _format_log(f"  ✅ PDB conversion completed for chain {chain}")
+            
+            # Step 6: Remove hydrogens using PyMOL, then superimpose to original (true crystal) frame
+            yield _format_log(f"  Removing hydrogens using PyMOL for chain {chain}...")
+            min_pdb_noH = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold_minimized_noH.pdb"
+            do_superimpose = original_for_align.exists()
+            if do_superimpose:
+                yield _format_log(f"  Superimposing minimized chain to original (true crystal) frame...")
+            try:
+                import tempfile
+                # Build superimposition block: align minimized CA to original's chain CA so ligand stays in frame
+                superimpose_block = ""
+                if do_superimpose:
+                    superimpose_block = f"""
+cmd.load("{original_for_align.resolve()}", "orig_ref")
+cmd.align("min_chain_{chain} and name CA", "orig_ref and chain {chain} and name CA")
+cmd.delete("orig_ref")
+"""
+                pymol_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
+                pymol_script.write(f"""
+from pymol import cmd
+cmd.load("{min_pdb.resolve()}", "min_chain_{chain}")
+cmd.remove("hydrogens")
+{superimpose_block}
+cmd.save("{min_pdb_noH.resolve()}", "min_chain_{chain}")
+cmd.quit()
+""")
+                pymol_script.close()
+                
+                result = subprocess.run(
+                    ["pymol", "-c", "-Q", pymol_script.name],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                
+                if result.returncode != 0 or not min_pdb_noH.exists():
+                    raise Exception(f"PyMOL failed: {result.stderr}")
+                
+                os.unlink(pymol_script.name)
+                yield _format_log(f"  ✅ Hydrogens removed for chain {chain}")
+                if do_superimpose:
+                    yield _format_log(f"  ✅ Minimized chain {chain} superimposed to original frame")
+            except Exception as e:
+                yield _format_log(f"  ⚠️ PyMOL hydrogen removal failed, using original: {e}", 'warning')
+                min_pdb_noH = min_pdb
+            
+            # Minimized chain noH is written to output/; it will be merged into 1_protein_no_hydrogens.pdb
+            # when the user runs Prepare Structure (1_protein_no_hydrogens is created there).
+            yield _format_log(f"  ✅ Chain {chain} minimization saved to {min_pdb_noH.name}. It will be merged into 1_protein_no_hydrogens.pdb when you run Prepare Structure.")
+            
+        except Exception as e:
+            yield _format_log(f"  ❌ Error minimizing chain {chain}: {str(e)}", 'error')
+            import traceback
+            logger.error(traceback.format_exc())
+            continue
+
+
+def _minimize_esmfold_chains(pdb_id, chains_to_minimize):
+    """
+    Minimize ESMFold-generated chains using AMBER.
+    
+    Args:
+        pdb_id: PDB ID (e.g., '1KE5')
+        chains_to_minimize: List of chain IDs to minimize (e.g., ['A', 'B'])
+    
+    Returns:
+        List of successfully minimized chain IDs
+    """
+    minimized_chains = []
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    
+    for chain in chains_to_minimize:
+        try:
+            # Step 1: Prepare tleap input file (all minimization files in output/, not docking/)
+            esmfold_pdb = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold.pdb"
+            if not esmfold_pdb.exists():
+                logger.warning(f"ESMFold PDB not found for chain {chain}: {esmfold_pdb}")
+                continue
+            
+            tleap_in = OUTPUT_DIR / f"tleap_{chain}.in"
+            with open(tleap_in, 'w') as f:
+                f.write("source leaprc.protein.ff14SB\n")
+                f.write(f"protein = loadpdb {esmfold_pdb.resolve()}\n")
+                f.write(f"saveamberparm protein {pdb_id}_chain_{chain}_esmfold.prmtop {pdb_id}_chain_{chain}_esmfold.inpcrd\n")
+                f.write("quit\n")
+            
+            # Step 2: Run tleap
+            prmtop = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold.prmtop"
+            inpcrd = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold.inpcrd"
+            
+            if not prmtop.exists() or not inpcrd.exists():
+                cmd = ["tleap", "-f", str(tleap_in)]
+                result = subprocess.run(
+                    cmd,
+                    cwd=str(OUTPUT_DIR),
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0 or not prmtop.exists():
+                    logger.error(f"tleap failed for chain {chain}: {result.stderr}")
+                    continue
+            
+            # Step 3: Prepare min.in file
+            min_in = OUTPUT_DIR / f"min_{chain}.in"
+            with open(min_in, 'w') as f:
+                f.write("#Two-stage minimization: sidechains first\n")
+                f.write(" &cntrl\n")
+                f.write("  imin=1, maxcyc=300, ncyc=150,\n")
+                f.write("  ntb=0, cut=10.0, igb=1\n")
+                f.write(" /\n")
+            
+            # Step 4: Run sander minimization
+            min_out = OUTPUT_DIR / f"min_{chain}.out"
+            min_rst = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold_minimized.rst"
+            
+            cmd = [
+                "sander",
+                "-O",
+                "-i", str(min_in),
+                "-o", str(min_out),
+                "-p", str(prmtop),
+                "-c", str(inpcrd),
+                "-r", str(min_rst)
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                cwd=str(OUTPUT_DIR),
+                capture_output=True,
+                text=True,
+            )
+            
+            if result.returncode != 0 or not min_rst.exists():
+                logger.error(f"sander minimization failed for chain {chain}: {result.stderr}")
+                continue
+            
+            # Step 5: Convert back to PDB using ambpdb
+            min_pdb = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold_minimized.pdb"
+            with open(min_pdb, 'w') as f:
+                cmd = [
+                    "ambpdb",
+                    "-p", str(prmtop),
+                    "-c", str(min_rst)
+                ]
+                result = subprocess.run(
+                    cmd,
+                    stdout=f,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            
+            if result.returncode != 0 or not min_pdb.exists():
+                logger.error(f"ambpdb failed for chain {chain}: {result.stderr}")
+                continue
+            
+            # Step 6: Remove hydrogens using PyMOL (run in subprocess to avoid conflicts)
+            min_pdb_noH = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold_minimized_noH.pdb"
+            try:
+                import tempfile
+                pymol_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
+                pymol_script.write(f"""
+from pymol import cmd
+cmd.load("{min_pdb.resolve()}", "min_chain_{chain}")
+cmd.remove("hydrogens")
+cmd.save("{min_pdb_noH.resolve()}", "min_chain_{chain}")
+cmd.quit()
+""")
+                pymol_script.close()
+                
+                result = subprocess.run(
+                    ["pymol", "-c", "-Q", pymol_script.name],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                
+                if result.returncode != 0 or not min_pdb_noH.exists():
+                    raise Exception(f"PyMOL failed: {result.stderr}")
+                
+                os.unlink(pymol_script.name)
+            except Exception as e:
+                logger.warning(f"PyMOL hydrogen removal failed for chain {chain}, using original: {e}")
+                # Fallback: use the minimized PDB as-is
+                min_pdb_noH = min_pdb
+            
+            # Minimized noH is in output/; it will be merged into 1_protein_no_hydrogens.pdb when user runs Prepare Structure
+            logger.info(f"Minimized chain {chain} saved to {min_pdb_noH.name}. It will be merged into 1_protein_no_hydrogens.pdb when you run Prepare Structure.")
+            minimized_chains.append(chain)
+            
+        except Exception as e:
+            logger.error(f"Error minimizing chain {chain}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            continue
+    
+    return minimized_chains
+
+
+def _replace_chain_in_pdb(target_pdb, chain_id, source_pdb):
+    """
+    Replace a specific chain in target_pdb with the chain from source_pdb.
+    
+    Args:
+        target_pdb: Path to target PDB file (will be modified)
+        chain_id: Chain ID to replace
+        source_pdb: Path to source PDB file containing the new chain
+    """
+    # Read target PDB
+    with open(target_pdb, 'r') as f:
+        target_lines = f.readlines()
+    
+    # Read source PDB
+    with open(source_pdb, 'r') as f:
+        source_lines = f.readlines()
+    
+    # Filter target: keep all lines except those with the specified chain
+    filtered_target = []
+    for line in target_lines:
+        if line.startswith(('ATOM', 'HETATM')):
+            if len(line) >= 21:
+                chain = line[21]
+                if chain != chain_id:
+                    filtered_target.append(line)
+        else:
+            # Keep non-ATOM lines
+            filtered_target.append(line)
+    
+    # Extract chain from source
+    source_chain_lines = []
+    for line in source_lines:
+        if line.startswith(('ATOM', 'HETATM')):
+            if len(line) >= 21:
+                chain = line[21]
+                if chain == 'A' or chain == chain_id:  # ESMFold outputs as chain A
+                    # Update chain ID to match
+                    new_line = line[:21] + chain_id + line[22:]
+                    source_chain_lines.append(new_line)
+    
+    # Combine: target (without old chain) + new chain
+    combined = []
+    for line in filtered_target:
+        if line.startswith('END'):
+            # Insert new chain before END
+            combined.extend(source_chain_lines)
+        combined.append(line)
+    
+    # Write back
+    with open(target_pdb, 'w') as f:
+        f.writelines(combined)
+
+
+def _prepare_receptor_for_docking():
+    """
+    Prepare receptor files for docking using the procedure in python/docking.py:
+      1. Run tleap on 1_protein_no_hydrogens.pdb to add hydrogens -> protein.pdb
+      2. Run pdb4amber on receptor.pdb -> receptor_fixed.pdb
+      3. Prepare receptor PDBQT with Meeko (mk_prepare_receptor.py)
+    
+    If ESMFold-completed structure is being used, the receptor will include:
+    - Completed chains from ESMFold (for chains that were selected for completion)
+    - Original chains (for chains that were not selected for completion)
+    
+    Returns paths (as Path objects) to receptor PDB and PDBQT.
+    """
+    docking_dir = _ensure_docking_folder()
+
+    protein_no_h = OUTPUT_DIR / "1_protein_no_hydrogens.pdb"
+    if not protein_no_h.exists():
+        raise FileNotFoundError(
+            f"1_protein_no_hydrogens.pdb not found in {OUTPUT_DIR}. "
+            "Please run structure preparation first."
+        )
+
+    # Check if completed structure is being used
+    flag_file = OUTPUT_DIR / ".use_completed_structure"
+    complete_structure_path = OUTPUT_DIR / "0_complete_structure.pdb"
+    use_completed = flag_file.exists() and complete_structure_path.exists()
+    
+    if use_completed:
+        logger.info("ESMFold-completed structure is being used for docking receptor preparation")
+        logger.info(f"Completed structure includes: ESMFold-completed chains + original chains not selected for completion")
+
+    # Step 1: tleap -> protein.pdb (receptor.pdb)
+    tleap_in = docking_dir / "prepare_receptor.in"
+    receptor_pdb = docking_dir / "receptor.pdb"
+    
+    # Check if receptor needs to be regenerated (if completed structure is newer or receptor doesn't exist)
+    regenerate_receptor = False
+    if not receptor_pdb.exists():
+        regenerate_receptor = True
+    elif use_completed and complete_structure_path.exists():
+        # If using completed structure, check if it's newer than the receptor
+        receptor_mtime = receptor_pdb.stat().st_mtime
+        completed_mtime = complete_structure_path.stat().st_mtime
+        protein_mtime = protein_no_h.stat().st_mtime
+        # Regenerate if completed structure or protein file is newer
+        if completed_mtime > receptor_mtime or protein_mtime > receptor_mtime:
+            logger.info("Regenerating receptor: completed structure or protein file is newer")
+            regenerate_receptor = True
+
+    if regenerate_receptor:
+        # Delete old receptor files to force regeneration
+        if receptor_pdb.exists():
+            receptor_pdb.unlink()
+        receptor_fixed_path = docking_dir / "receptor_fixed.pdb"
+        if receptor_fixed_path.exists():
+            receptor_fixed_path.unlink()
+        receptor_pdbqt_path = docking_dir / "receptor.pdbqt"
+        if receptor_pdbqt_path.exists():
+            receptor_pdbqt_path.unlink()
+        
+        # Use absolute path to protein file since tleap runs from docking dir
+        protein_no_h_abs = str(protein_no_h.resolve())
+        with open(tleap_in, "w") as f:
+            f.write("source leaprc.protein.ff14SB\n")
+            f.write(f"protein = loadpdb {protein_no_h_abs}\n")
+            f.write("savepdb protein receptor.pdb\n")
+            f.write("quit\n")
+
+        # Run tleap in docking directory
+        cmd = ["tleap", "-f", tleap_in.name]
+        result = subprocess.run(
+            cmd,
+            cwd=docking_dir,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not receptor_pdb.exists():
+            raise RuntimeError(
+                "Failed to prepare receptor with tleap.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+
+    # Step 2: pdb4amber -> receptor_fixed.pdb
+    receptor_fixed = docking_dir / "receptor_fixed.pdb"
+    if regenerate_receptor or not receptor_fixed.exists():
+        cmd = [
+            "pdb4amber",
+            "-i",
+            str(receptor_pdb),
+            "-o",
+            str(receptor_fixed),
+        ]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not receptor_fixed.exists():
+            raise RuntimeError(
+                "Failed to run pdb4amber on receptor.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+
+    # Step 3: Meeko receptor preparation -> receptor.pdbqt
+    receptor_pdbqt = docking_dir / "receptor.pdbqt"
+    if regenerate_receptor or not receptor_pdbqt.exists():
+        cmd = [
+            "mk_prepare_receptor.py",
+            "-i",
+            str(receptor_fixed),
+            "-o",
+            "receptor",  # Meeko will append .pdbqt
+            "-p",
+        ]
+        result = subprocess.run(
+            cmd,
+            cwd=docking_dir,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not receptor_pdbqt.exists():
+            # Check if error is due to clashes/disulfide bonds
+            error_text = result.stderr + result.stdout
+            needs_minimization = (
+                "excess inter-residue bond" in error_text or
+                ("Expected" in error_text and "paddings" in error_text)
+            )
+            
+            if needs_minimization:
+                # Check if chains were minimized
+                min_status_file = OUTPUT_DIR / ".chains_minimized"
+                minimized_chains = []
+                if min_status_file.exists():
+                    with open(min_status_file, 'r') as f:
+                        content = f.read().strip()
+                        minimized_chains = content.split(',') if content else []
+                
+                error_msg = (
+                    "Failed to prepare receptor PDBQT with Meeko due to clashes/disulfide bonds.\n\n"
+                )
+                
+                if not minimized_chains:
+                    error_msg += (
+                        "⚠️ ESMFold-generated chains need energy minimization.\n"
+                        "Please go back to the 'Fill Missing Residues' step and:\n"
+                        "1. Check the 'Energy minimize ESMFold-generated chains' option\n"
+                        "2. Select the chains you want to minimize\n"
+                        "3. Rebuild the completed structure\n"
+                        "4. Then try docking again.\n\n"
+                    )
+                else:
+                    error_msg += (
+                        f"Some chains were minimized ({', '.join(minimized_chains)}), but the error persists.\n"
+                        "You may need to minimize additional chains or check the structure.\n\n"
+                    )
+                
+                error_msg += f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                raise RuntimeError(error_msg)
+            else:
+                raise RuntimeError(
+                    "Failed to prepare receptor PDBQT with Meeko.\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                )
+
+    return receptor_fixed, receptor_pdbqt
+
+
+def _compute_ligand_center(pdb_path: Path):
+    """Compute geometric center of all atoms in a ligand PDB using MDAnalysis."""
+    try:
+        import MDAnalysis as mda
+        import numpy as np
+    except Exception as e:
+        raise RuntimeError(
+            "MDAnalysis and NumPy are required for docking but could not be imported."
+        ) from e
+
+    u = mda.Universe(str(pdb_path))
+    if u.atoms.n_atoms == 0:
+        raise ValueError(f"No atoms found in ligand file {pdb_path}")
+    coords = u.atoms.positions.astype(float)
+    center = coords.mean(axis=0)
+    return float(center[0]), float(center[1]), float(center[2])
+
+
+def _prepare_docked_pose_as_ligand(original_ligand: Path, pose_pdb: Path):
+    """
+    Take a docked pose PDB and sanitize it so it can replace the original ligand:
+      - Restore original residue name, chain ID, and residue index
+      - Run ligand sanity checks (CONECT/MASTER removal, ATOM->HETATM, distinct atom names)
+    This updates the pose_pdb in place.
+    """
+    if not original_ligand.exists():
+        raise FileNotFoundError(f"Original ligand file not found: {original_ligand}")
+    if not pose_pdb.exists():
+        raise FileNotFoundError(f"Docked pose file not found: {pose_pdb}")
+
+    residue_info = extract_original_residue_info(str(original_ligand))
+    if residue_info:
+        restore_residue_info_in_pdb(
+            str(pose_pdb),
+            residue_info.get("resname", "LIG"),
+            residue_info.get("chain_id", ""),
+            residue_info.get("resnum", "1"),
+        )
+    # Run the existing ligand sanity checks
+    if not sanity_check_ligand_pdb(str(pose_pdb)):
+        raise RuntimeError(f"Sanity check failed for docked pose {pose_pdb}")
+
+
+def _sanitize_docked_pose_for_antechamber(pose_pdb: Path, original_residue_info: dict):
+    """
+    Sanitize a docked pose PDB to make it compatible with antechamber:
+      1. Remove CONECT/MASTER/REMARK records
+      2. Convert all ATOM records to HETATM
+      3. Restore original residue name, chain ID, and residue number
+      4. Make atom names distinct (C1, C2, N1, N2, O1, O2, H1, H2, etc.)
+    
+    PDB Column format (1-indexed):
+      1-6:   RECORD (HETATM)
+      7-11:  ATOM # (atom serial number, right-justified)
+      12:    Blank
+      13-16: ATOM NAME (right-justified for 1-2 char elements)
+      17:    RES ALT (alternate location indicator, usually blank)
+      18-20: RES NAME (right-justified)
+      21:    Blank
+      22:    CHN ID (chain identifier)
+      23-26: RES# (residue sequence number, right-justified)
+      27:    Insertion code (usually blank)
+      28-30: Blank (3 spaces)
+      31-38: X coordinate (8 chars, %8.3f)
+      39-46: Y coordinate (8 chars, %8.3f)
+      47-54: Z coordinate (8 chars, %8.3f)
+      55-60: OCC (occupancy, 6 chars)
+      61-66: TEMP (temperature factor, 6 chars)
+      67-76: Blank (10 spaces)
+      77-78: ELEMENT (right-justified)
+      79-80: Charge (e.g., 1+, 1-, 2+)
+    
+    Args:
+        pose_pdb: Path to the docked pose PDB file (modified in place)
+        original_residue_info: Dict with 'resname', 'chain_id', 'resnum' from original ligand
+    """
+    if not pose_pdb.exists():
+        raise FileNotFoundError(f"Docked pose file not found: {pose_pdb}")
+    
+    # Get residue info (use provided or defaults)
+    resname = original_residue_info.get("resname", "LIG") if original_residue_info else "LIG"
+    chain_id = original_residue_info.get("chain_id", "A") if original_residue_info else "A"
+    resnum = original_residue_info.get("resnum", "1") if original_residue_info else "1"
+    
+    # Ensure resname is exactly 3 chars, chain_id is 1 char
+    resname = resname[:3].upper()
+    chain_id = chain_id[0] if chain_id else "A"
+    
+    # Read the file
+    with open(pose_pdb, 'r') as f:
+        lines = f.readlines()
+    
+    # Track element counts for distinct atom naming
+    from collections import defaultdict
+    element_counts = defaultdict(int)
+    
+    processed_lines = []
+    atom_serial = 0
+    
+    for line in lines:
+        # Skip CONECT, MASTER, REMARK, COMPND, AUTHOR, TER, HEADER, TITLE, CRYST1 lines
+        if line.startswith(('CONECT', 'MASTER', 'REMARK', 'COMPND', 'AUTHOR', 'TER', 'HEADER', 'TITLE', 'CRYST1')):
+            continue
+        
+        if line.startswith(('ATOM', 'HETATM')):
+            atom_serial += 1
+            
+            # Pad line to ensure it's long enough
+            padded_line = line.ljust(80)
+            
+            # Extract X, Y, Z coordinates (columns 31-54, 0-indexed: 30-54)
+            try:
+                x = float(padded_line[30:38].strip())
+                y = float(padded_line[38:46].strip())
+                z = float(padded_line[46:54].strip())
+            except ValueError:
+                continue  # Skip lines with invalid coordinates
+            
+            # Extract element from column 77-78 and charge from column 79-80
+            element = padded_line[76:78].strip()
+            charge = padded_line[78:80].strip()
+            
+            # Handle cases where element+charge are combined (e.g., "N1+")
+            if element and len(element) > 2:
+                import re
+                match = re.match(r'^([A-Za-z]{1,2})(\d*[+-])$', element)
+                if match:
+                    element = match.group(1).upper()
+                    charge = match.group(2)
+            
+            # If no element found, extract from atom name
+            if not element:
+                atom_name = padded_line[12:16].strip()
+                if len(atom_name) >= 1:
+                    # Check for two-letter elements
+                    if len(atom_name) >= 2 and atom_name[:2].upper() in ['CL', 'BR', 'MG', 'ZN', 'FE', 'CU', 'MN']:
+                        element = atom_name[:2].upper()
+                    else:
+                        # Get first alphabetic character
+                        for c in atom_name:
+                            if c.isalpha():
+                                element = c.upper()
+                                break
+                        if not element:
+                            element = 'X'
+            
+            # Normalize element to uppercase
+            element = element.upper()
+            
+            # Create distinct atom name (e.g., C1, C2, N1, H1, H2, etc.)
+            element_counts[element] += 1
+            count = element_counts[element]
+            
+            # Format atom name: right-justify within 4 chars
+            atom_name_str = f"{element}{count}"
+            if len(atom_name_str) > 4:
+                atom_name_str = atom_name_str[:4]
+            
+            # Build properly formatted PDB line following standard format
+            # HETATM    1   N1 MKW A 203    7.216   9.776  -4.013  1.00  0.00           N
+            new_line = (
+                f"HETATM"                      # 1-6: Record type (6 chars)
+                f"{atom_serial:5d}"            # 7-11: Atom serial (5 chars, right-justified)
+                f" "                           # 12: Blank (1 char)
+                f"{atom_name_str:>4}"          # 13-16: Atom name (4 chars, right-justified)
+                f" "                           # 17: Alt loc indicator (1 char, blank)
+                f"{resname:>3}"                # 18-20: Residue name (3 chars, right-justified)
+                f" "                           # 21: Blank (1 char)
+                f"{chain_id}"                  # 22: Chain ID (1 char)
+                f"{resnum:>4}"                 # 23-26: Residue number (4 chars, right-justified)
+                f"    "                        # 27-30: Insertion code + blank (4 chars)
+                f"{x:8.3f}"                    # 31-38: X coordinate (8 chars)
+                f"{y:8.3f}"                    # 39-46: Y coordinate (8 chars)
+                f"{z:8.3f}"                    # 47-54: Z coordinate (8 chars)
+                f"  1.00"                      # 55-60: Occupancy (6 chars)
+                f"  0.00"                      # 61-66: Temp factor (6 chars)
+                f"          "                  # 67-76: Blank (10 chars)
+                f"{element:>2}"                # 77-78: Element symbol (2 chars, right-justified)
+                f"{charge:<2}"                 # 79-80: Charge (2 chars, left-justified)
+                f"\n"
+            )
+            processed_lines.append(new_line)
+        elif line.startswith('END'):
+            continue  # We'll add END at the end
+    
+    # Add END record
+    processed_lines.append('END\n')
+    
+    # Write back
+    with open(pose_pdb, 'w') as f:
+        f.writelines(processed_lines)
+    
+    logger.info(f"Sanitized docked pose {pose_pdb}: resname={resname}, chain={chain_id}, resnum={resnum}, atoms={atom_serial}")
+    logger.info(f"Element counts: {dict(element_counts)}")
+
+
+def _parse_vina_config(config_path: Path):
+    """
+    Parse Vina config file and return a dict with parameters.
+    Returns None if file doesn't exist or can't be parsed.
+    """
+    if not config_path.exists():
+        return None
+    
+    config = {}
+    try:
+        for line in config_path.read_text().split('\n'):
+            line = line.strip()
+            # Skip comments and empty lines
+            if not line or line.startswith('#'):
+                continue
+            
+            # Parse key = value format
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                # Try to convert to appropriate type
+                try:
+                    if '.' in value:
+                        config[key] = float(value)
+                    else:
+                        config[key] = int(value)
+                except ValueError:
+                    config[key] = value
+        
+        return config
+    except Exception as e:
+        logger.warning(f"Error parsing config file {config_path}: {e}")
+        return None
+
+
+def _parse_vina_log(log_path: Path):
+    """
+    Parse AutoDock Vina log file and extract binding energies per mode.
+    Returns dict: {mode_index: energy_kcal_mol}
+    """
+    energies = {}
+    if not log_path.exists():
+        return energies
+
+    try:
+        import re
+
+        with log_path.open("r") as f:
+            for line in f:
+                # Typical Vina line:
+                #    1       -7.3      0.000      0.000
+                m = re.match(r"^\s*(\d+)\s+(-?\d+\.\d+)", line)
+                if m:
+                    mode = int(m.group(1))
+                    energy = float(m.group(2))
+                    energies[mode] = energy
+    except Exception as e:
+        logger.warning(f"Could not parse Vina log {log_path}: {e}")
+
+    return energies
 
 class MDSimulationGenerator:
     """Handles MD simulation file generation and protein processing"""
@@ -496,6 +1365,61 @@ def fetch_pdb():
     except Exception as e:
         logger.error(f"Error fetching PDB: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/proxy-pdb/<pdb_id>', methods=['GET'])
+def proxy_pdb(pdb_id):
+    """Proxy endpoint to fetch PDB from RCSB or mirrors (avoids CORS issues)"""
+    try:
+        pdb_id = pdb_id.upper().strip()
+        if not pdb_id or len(pdb_id) != 4:
+            return jsonify({'error': 'Invalid PDB ID'}), 400
+        
+        # Try multiple sources in order of preference
+        urls = [
+            f"https://files.rcsb.org/download/{pdb_id}.pdb",  # Primary RCSB
+            f"https://www.ebi.ac.uk/pdbe/entry-files/download/pdb{pdb_id.lower()}.ent",  # PDBe (European mirror)
+        ]
+        
+        for url in urls:
+            try:
+                print(f"DEBUG: Trying to fetch PDB from {url}")
+                response = requests.get(url, timeout=30)
+                if response.status_code == 200:
+                    content = response.text
+                    # Validate it looks like a PDB file
+                    if 'ATOM' in content or 'HETATM' in content:
+                        print(f"DEBUG: Successfully fetched PDB from {url}")
+                        return Response(content, mimetype='text/plain')
+            except requests.exceptions.RequestException as e:
+                print(f"DEBUG: Failed to fetch from {url}: {e}")
+                continue
+        
+        return jsonify({'error': f'PDB ID {pdb_id} not found or servers unavailable'}), 404
+    except Exception as e:
+        logger.error(f"Error proxying PDB {pdb_id}: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/get-pdb-content', methods=['GET'])
+def get_pdb_content():
+    """Return the content of a PDB file"""
+    try:
+        file_path = request.args.get('file', '')
+        if not file_path:
+            return jsonify({'success': False, 'error': 'No file path provided'}), 400
+        
+        # Security check: ensure the file is within the output directory
+        file_path = Path(file_path)
+        if not str(file_path.resolve()).startswith(str(OUTPUT_DIR.resolve())):
+            return jsonify({'success': False, 'error': 'Invalid file path'}), 400
+        
+        if not file_path.exists():
+            return jsonify({'success': False, 'error': 'File not found'}), 404
+        
+        content = file_path.read_text()
+        return jsonify({'success': True, 'content': content})
+    except Exception as e:
+        logger.error(f"Error reading PDB content: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/parse-pdb', methods=['POST'])
 def parse_pdb():
@@ -1161,19 +2085,26 @@ def prepare_structure_endpoint():
         pdb_content = data.get('pdb_content', '')
         options = data.get('options', {})
         
-        # Check if completed structure exists and use it instead
+        # Check if user wants to use completed structure (ESMFold)
+        flag_file = OUTPUT_DIR / ".use_completed_structure"
         complete_structure_path = OUTPUT_DIR / "0_complete_structure.pdb"
-        if complete_structure_path.exists():
-            logger.info("Using completed structure (0_complete_structure.pdb) for preparation")
+        
+        if flag_file.exists() and complete_structure_path.exists():
+            logger.info("Using superimposed completed structure (0_complete_structure.pdb) for preparation so ligands stay in the same coordinate frame")
             with open(complete_structure_path, 'r') as f:
                 pdb_content = f.read()
         elif not pdb_content:
             return jsonify({'error': 'No PDB content provided and no completed structure found'}), 400
         
-        # Prepare structure
-        result = prepare_structure(pdb_content, options)
+        # Prepare structure (use OUTPUT_DIR so paths match app's output folder)
+        result = prepare_structure(pdb_content, options, output_dir=str(OUTPUT_DIR))
         
-        return jsonify({
+        # Validate and sanitize ligand names early (after structure preparation)
+        # This ensures numeric ligand names are converted to 3-letter codes
+        ligand_name_changes = validate_and_sanitize_all_ligand_files()
+        
+        # Build response
+        response_data = {
             'success': True,
             'prepared_structure': result['prepared_structure'],
             'original_atoms': result['original_atoms'],
@@ -1183,8 +2114,11 @@ def prepare_structure_endpoint():
             'preserved_ligands': result['preserved_ligands'],
             'ligand_present': result.get('ligand_present', False),
             'separate_ligands': result.get('separate_ligands', False),
-            'ligand_content': result.get('ligand_content', '')
-        })
+            'ligand_content': result.get('ligand_content', ''),
+            'ligand_name_changes': ligand_name_changes  # List of (old_name, new_name, filename) tuples
+        }
+        
+        return jsonify(response_data)
     
     except Exception as e:
         logger.error(f"Error preparing structure: {str(e)}")
@@ -1211,6 +2145,954 @@ def parse_structure_endpoint():
     except Exception as e:
         logger.error(f"Error parsing structure: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/docking/run', methods=['POST'])
+@stream_with_context
+def run_docking():
+    """
+    Run ligand docking for preserved ligands using Vina and Meeko with streaming logs.
+    All outputs are stored under OUTPUT_DIR/docking.
+    Returns a summary of ligands and available poses (file-based, no contents).
+    """
+    def generate():
+        try:
+            docking_dir = _ensure_docking_folder()
+            yield _format_log(f"Working directory: {os.getcwd()}")
+            yield _format_log(f"Output directory: {OUTPUT_DIR}")
+            yield _format_log(f"Docking directory: {docking_dir}")
+            
+            # Check if using ESMFold-completed structure
+            flag_file = OUTPUT_DIR / ".use_completed_structure"
+            complete_structure_path = OUTPUT_DIR / "0_complete_structure.pdb"
+            if flag_file.exists() and complete_structure_path.exists():
+                yield _format_log("ℹ️ Using ESMFold-completed structure for receptor")
+                yield _format_log("   (Completed chains from ESMFold + original chains not selected for completion)")
+            
+            yield _format_log("Preparing receptor for docking...")
+            receptor_fixed, receptor_pdbqt = _prepare_receptor_for_docking()
+            yield _format_log(f"✅ Receptor prepared: {receptor_pdbqt.name}")
+
+            # Optional per-ligand configuration from frontend
+            data = request.get_json(silent=True) or {}
+            cfg_list = data.get("ligands", [])
+            ligand_configs = {}
+            for cfg in cfg_list:
+                try:
+                    idx = int(cfg.get("index", 0))
+                    if idx > 0:
+                        ligand_configs[idx] = cfg
+                except Exception:
+                    continue
+
+            # Find all individual ligand files (use obabel versions for better PDB->SDF conversion)
+            ligand_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_obabel_*.pdb"))
+            if not ligand_files:
+                # Fallback to non-obabel files if obabel files don't exist
+                ligand_files = sorted(
+                    [f for f in OUTPUT_DIR.glob("4_ligands_corrected_*.pdb") if "_obabel_" not in f.name]
+                )
+            if not ligand_files:
+                error_msg = 'No corrected ligand PDB files found. Please run structure preparation with preserved ligands.'
+                yield _format_log(error_msg, 'error')
+                yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': error_msg})}\n\n"
+                return
+
+            yield _format_log(f"Found {len(ligand_files)} ligand file(s) to process")
+            yield _format_log(f"Selected {len(ligand_configs)} ligand(s) for docking")
+
+            ligands_summary = []
+            warnings = []
+            errors = []
+
+            for idx, lig_pdb in enumerate(ligand_files, start=1):
+                # Only dock ligands that are explicitly enabled in the config
+                # If no config exists for this ligand, skip it (user didn't select it)
+                cfg = ligand_configs.get(idx)
+                if cfg is None:
+                    # No config sent = ligand was not selected for docking
+                    continue
+                if cfg.get("enabled") is False:
+                    # Explicitly disabled
+                    continue
+
+                yield _format_log(f"\n{'='*60}")
+                yield _format_log(f"Processing ligand {idx} ({lig_pdb.name})")
+                yield _format_log(f"{'='*60}")
+
+                lig_dir = docking_dir / f"ligand_{idx}"
+                lig_dir.mkdir(parents=True, exist_ok=True)
+
+                # Copy original corrected ligand for reference
+                original_copy = lig_dir / "original_ligand.pdb"
+                if not original_copy.exists():
+                    original_copy.write_text(lig_pdb.read_text())
+
+                try:
+                    # Step 1: obabel to SDF
+                    yield _format_log(f"Step 1: Converting ligand {idx} from PDB to SDF using OpenBabel...")
+                    sdf_path = lig_dir / f"ligand_{idx}.sdf"
+                    cmd = [
+                        "obabel",
+                        "-i",
+                        "pdb",
+                        str(lig_pdb),
+                        "-o",
+                        "sdf",
+                        "-O",
+                        str(sdf_path),
+                    ]
+                    yield _format_log(f"Running command: {' '.join(cmd)}")
+                    
+                    # Stream obabel output
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                        universal_newlines=True
+                    )
+                    
+                    for line in iter(process.stdout.readline, ''):
+                        if line:
+                            yield _format_log(line.strip())
+                    
+                    process.wait()
+                    if process.returncode != 0 or not sdf_path.exists():
+                        raise RuntimeError(
+                            f"OpenBabel failed for ligand {idx} ({lig_pdb.name}). Return code: {process.returncode}"
+                        )
+                    yield _format_log(f"✅ OpenBabel conversion successful: {sdf_path.name}")
+
+                    # Step 2: Meeko ligand preparation -> PDBQT
+                    yield _format_log(f"Step 2: Preparing ligand {idx} with Meeko...")
+                    lig_pdbqt = lig_dir / f"ligand_{idx}.pdbqt"
+                    cmd = [
+                        "mk_prepare_ligand.py",
+                        "-i",
+                        str(sdf_path),
+                        "-o",
+                        str(lig_pdbqt),
+                    ]
+                    yield _format_log(f"Running command: {' '.join(cmd)}")
+                    
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                    )
+                    
+                    if result.stdout:
+                        yield _format_log(result.stdout.strip())
+                    if result.stderr:
+                        yield _format_log(result.stderr.strip(), 'warning')
+                    
+                    if result.returncode != 0 or not lig_pdbqt.exists():
+                        raise RuntimeError(
+                            f"Meeko failed for ligand {idx}.\n"
+                            f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                        )
+                    yield _format_log(f"✅ Meeko preparation successful: {lig_pdbqt.name}")
+
+                    # Step 3: Read docking parameters from config file or use provided values
+                    yield _format_log(f"Step 3: Reading docking parameters for ligand {idx}...")
+                    
+                    config_file = lig_dir / "vina_config.txt"
+                    config = _parse_vina_config(config_file) if config_file.exists() else None
+                    
+                    # Initialize defaults
+                    exhaustiveness = 8
+                    num_modes = 9
+                    energy_range = 3
+                    cpu = 0
+                    seed = 0
+                    
+                    # Priority: config file > user-provided > computed
+                    if config:
+                        yield _format_log(f"Reading parameters from config file: {config_file.name}")
+                        cx = config.get("center_x", None)
+                        cy = config.get("center_y", None)
+                        cz = config.get("center_z", None)
+                        sx = config.get("size_x", 18.0)
+                        sy = config.get("size_y", 18.0)
+                        sz = config.get("size_z", 18.0)
+                        exhaustiveness = config.get("exhaustiveness", 8)
+                        num_modes = config.get("num_modes", 9)
+                        energy_range = config.get("energy_range", 3)
+                        cpu = config.get("cpu", 0)
+                        seed = config.get("seed", 0)
+                    else:
+                        # Fallback to user-provided or computed
+                        user_center = (cfg or {}).get("center", {}) if cfg else {}
+                        if (
+                            isinstance(user_center, dict)
+                            and all(k in user_center for k in ("x", "y", "z"))
+                        ):
+                            try:
+                                cx = float(user_center.get("x"))
+                                cy = float(user_center.get("y"))
+                                cz = float(user_center.get("z"))
+                                yield _format_log(f"Using user-provided center: ({cx:.2f}, {cy:.2f}, {cz:.2f})")
+                            except Exception:
+                                cx, cy, cz = _compute_ligand_center(lig_pdb)
+                                yield _format_log(f"Computed center: ({cx:.2f}, {cy:.2f}, {cz:.2f})")
+                        else:
+                            cx, cy, cz = _compute_ligand_center(lig_pdb)
+                            yield _format_log(f"Computed center: ({cx:.2f}, {cy:.2f}, {cz:.2f})")
+                        
+                        user_size = (cfg or {}).get("size", {}) if cfg else {}
+                        try:
+                            sx = float(user_size.get("x", 18.0))
+                            sy = float(user_size.get("y", 18.0))
+                            sz = float(user_size.get("z", 18.0))
+                        except Exception:
+                            sx = sy = sz = 18.0
+                    
+                    # If center not in config, compute it
+                    if cx is None or cy is None or cz is None:
+                        cx, cy, cz = _compute_ligand_center(lig_pdb)
+                        yield _format_log(f"Computed center: ({cx:.2f}, {cy:.2f}, {cz:.2f})")
+                    
+                    yield _format_log(f"Box center: ({cx:.2f}, {cy:.2f}, {cz:.2f}) Å")
+                    yield _format_log(f"Box size: ({sx:.2f}, {sy:.2f}, {sz:.2f}) Å")
+                    yield _format_log(f"Exhaustiveness: {exhaustiveness}, Num modes: {num_modes}, Energy range: {energy_range} kcal/mol")
+
+                    # Step 4: Run Vina docking
+                    yield _format_log(f"Step 4: Running AutoDock Vina docking for ligand {idx}...")
+                    docked_pdbqt = lig_dir / f"ligand_{idx}_docked.pdbqt"
+                    log_file = lig_dir / f"ligand_{idx}_docked.log"
+                    cmd = [
+                        "vina",
+                        "--receptor",
+                        str(receptor_pdbqt),
+                        "--ligand",
+                        str(lig_pdbqt),
+                        "--center_x",
+                        str(cx),
+                        "--center_y",
+                        str(cy),
+                        "--center_z",
+                        str(cz),
+                        "--size_x",
+                        str(sx),
+                        "--size_y",
+                        str(sy),
+                        "--size_z",
+                        str(sz),
+                        "--exhaustiveness",
+                        str(exhaustiveness),
+                        "--num_modes",
+                        str(num_modes),
+                        "--energy_range",
+                        str(energy_range),
+                        "--out",
+                        str(docked_pdbqt),
+                        "--log",
+                        str(log_file),
+                    ]
+                    if cpu > 0:
+                        cmd.extend(["--cpu", str(cpu)])
+                    if seed > 0:
+                        cmd.extend(["--seed", str(seed)])
+                    yield _format_log(f"Running command: {' '.join(cmd)}")
+                    
+                    # Stream Vina output
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                        universal_newlines=True
+                    )
+                    
+                    for line in iter(process.stdout.readline, ''):
+                        if line:
+                            yield _format_log(line.strip())
+                    
+                    process.wait()
+                    if process.returncode != 0 or not docked_pdbqt.exists():
+                        raise RuntimeError(
+                            f"Vina failed for ligand {idx}. Return code: {process.returncode}"
+                        )
+                    yield _format_log(f"✅ Vina docking completed: {docked_pdbqt.name}")
+
+                    # Step 6: Split poses
+                    yield _format_log(f"Step 5: Splitting docking poses for ligand {idx}...")
+                    cmd = [
+                        "vina_split",
+                        "--input",
+                        str(docked_pdbqt),
+                        "--ligand",
+                        f"ligand_{idx}_mode",
+                    ]
+                    yield _format_log(f"Running command: {' '.join(cmd)}")
+                    
+                    result = subprocess.run(
+                        cmd,
+                        cwd=lig_dir,
+                        capture_output=True,
+                        text=True,
+                    )
+                    
+                    if result.stdout:
+                        yield _format_log(result.stdout.strip())
+                    if result.stderr:
+                        yield _format_log(result.stderr.strip(), 'warning')
+                    
+                    if result.returncode != 0:
+                        warnings.append(
+                            f"vina_split reported issues for ligand {idx}: {result.stderr.strip()}"
+                        )
+                        yield _format_log(f"⚠️ Warning: vina_split issues for ligand {idx}", 'warning')
+                    else:
+                        yield _format_log(f"✅ Poses split successfully")
+
+                    # Parse binding energies from Vina log (per mode)
+                    mode_energies = _parse_vina_log(log_file)
+                    yield _format_log(f"Found {len(mode_energies)} binding mode(s)")
+
+                    # Step 7: Convert each mode back to PDB with OpenBabel
+                    yield _format_log(f"Step 6: Converting poses to PDB format...")
+                    pose_entries = []
+                    mode_pdbqt_files = sorted(lig_dir.glob(f"ligand_{idx}_mode*.pdbqt"))
+                    yield _format_log(f"Processing {len(mode_pdbqt_files)} pose(s)...")
+                    
+                    for mode_pdbqt in mode_pdbqt_files:
+                        mode_name = mode_pdbqt.stem  # e.g., ligand_1_mode1
+                        mode_index_str = mode_name.replace(f"ligand_{idx}_mode", "")
+                        try:
+                            mode_index = int(mode_index_str)
+                        except ValueError:
+                            mode_index = None
+
+                        yield _format_log(f"Processing pose {mode_index} ({mode_name})...")
+
+                        mode_pdb_noH = lig_dir / f"{mode_name}_noH.pdb"
+                        mode_pdb_h = lig_dir / f"{mode_name}_h.pdb"
+                        sanitized_pdb = lig_dir / f"{mode_name}_sanitized.pdb"
+                        
+                        # Step 7a: Convert PDBQT to PDB without hydrogens
+                        if not mode_pdb_noH.exists():
+                            yield _format_log(f"  Converting {mode_pdbqt.name} to PDB (removing hydrogens)...")
+                            cmd = [
+                                "obabel",
+                                "-i", "pdbqt",
+                                str(mode_pdbqt),
+                                "-o", "pdb",
+                                "-O",
+                                str(mode_pdb_noH),
+                                "-d",  # Delete existing hydrogens
+                            ]
+                            result = subprocess.run(
+                                cmd,
+                                capture_output=True,
+                                text=True,
+                            )
+                            if result.returncode != 0 or not mode_pdb_noH.exists():
+                                warnings.append(
+                                    f"Failed to convert {mode_pdbqt.name} to PDB for ligand {idx}: "
+                                    f"{result.stderr.strip()}"
+                                )
+                                yield _format_log(f"  ⚠️ Failed to convert {mode_pdbqt.name}", 'warning')
+                                continue
+                            yield _format_log(f"  ✅ Converted to {mode_pdb_noH.name}")
+                        
+                        # Step 7b: Add hydrogens at pH 7.4 using OpenBabel
+                        if not mode_pdb_h.exists():
+                            yield _format_log(f"  Adding hydrogens at pH 7.4...")
+                            cmd = [
+                                "obabel",
+                                "-i", "pdb",
+                                str(mode_pdb_noH),
+                                "-o", "pdb",
+                                "-O",
+                                str(mode_pdb_h),
+                                "-p", "7.4",
+                            ]
+                            result = subprocess.run(
+                                cmd,
+                                capture_output=True,
+                                text=True,
+                            )
+                            if result.returncode != 0 or not mode_pdb_h.exists():
+                                logger.warning(f"OpenBabel h_add failed for {mode_pdb_noH.name}: {result.stderr}")
+                                yield _format_log(f"  ⚠️ Failed to add hydrogens, using noH file", 'warning')
+                                # Fallback: use noH file
+                                mode_pdb_h.write_text(mode_pdb_noH.read_text())
+                            else:
+                                yield _format_log(f"  ✅ Hydrogens added: {mode_pdb_h.name}")
+                        
+                        # Step 7c: Create sanitized PDB with proper formatting for antechamber
+                        if not sanitized_pdb.exists():
+                            yield _format_log(f"  Sanitizing PDB for Antechamber compatibility...")
+                            try:
+                                # Get original residue info (BES, chain A, resnum 1611, etc.)
+                                original_residue_info = extract_original_residue_info(str(lig_pdb))
+                                
+                                # Copy the h_add output
+                                sanitized_pdb.write_text(mode_pdb_h.read_text())
+                                
+                                # Sanitize: fix atom names (C1, N1, H1...), residue name, chain, etc.
+                                _sanitize_docked_pose_for_antechamber(sanitized_pdb, original_residue_info)
+                                yield _format_log(f"  ✅ Sanitized: {sanitized_pdb.name}")
+                                
+                            except Exception as e:
+                                logger.warning(f"Error sanitizing {mode_pdb_h.name}: {e}")
+                                yield _format_log(f"  ⚠️ Sanitization error: {e}, using fallback", 'warning')
+                                # Fallback: just copy the h_add output
+                                if not sanitized_pdb.exists():
+                                    sanitized_pdb.write_text(mode_pdb_h.read_text())
+                        
+                        energy = mode_energies.get(mode_index)
+                        if energy:
+                            yield _format_log(f"  Binding energy: {energy:.2f} kcal/mol")
+
+                        pose_entries.append(
+                            {
+                                "mode_index": mode_index,
+                                "file": str(mode_pdb_h.relative_to(OUTPUT_DIR)),
+                                "sanitized_file": str(sanitized_pdb.relative_to(OUTPUT_DIR)),
+                                "energy": energy,
+                            }
+                        )
+
+                    yield _format_log(f"✅ Successfully processed ligand {idx} with {len(pose_entries)} pose(s)", 'success')
+                    # Extract ligand name (resname) from PDB file
+                    resname, chain = _get_ligand_info_from_pdb(lig_pdb)
+                    ligands_summary.append(
+                        {
+                            "index": idx,
+                            "name": resname,
+                            "chain": chain,
+                            "original_file": str(original_copy.relative_to(OUTPUT_DIR)),
+                            "corrected_file": str(lig_pdb.relative_to(OUTPUT_DIR)),
+                            "poses": pose_entries,
+                        }
+                    )
+                except Exception as e:
+                    error_msg = f"Ligand {idx} ({lig_pdb.name}): {str(e)}"
+                    errors.append(error_msg)
+                    yield _format_log(f"❌ Error: {error_msg}", 'error')
+
+            # Validate and sanitize ligand names before returning results
+            # This ensures any numeric names are converted early
+            validate_and_sanitize_all_ligand_files()
+            
+            # Send final result
+            result_data = {
+                'type': 'complete',
+                'success': len(errors) == 0,
+                'ligands': ligands_summary,
+                'warnings': warnings,
+                'errors': errors,
+            }
+            yield f"data: {json.dumps(result_data)}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Error running docking: {str(e)}")
+            yield _format_log(f'Internal server error: {str(e)}', 'error')
+            yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': f'Internal server error: {str(e)}'})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream')
+
+
+@app.route('/api/docking/get-structure', methods=['GET'])
+def get_docking_structure():
+    """
+    Return PDB content for a docking structure (original or a specific pose).
+    Query parameters:
+      - ligand_index: 1-based index of ligand
+      - type: 'original' or 'pose'
+      - mode_index: integer (required when type='pose')
+    """
+    try:
+        ligand_index = int(request.args.get("ligand_index", "0"))
+        if ligand_index <= 0:
+            return jsonify({"success": False, "error": "Invalid ligand_index"}), 400
+
+        docking_dir = OUTPUT_DIR / "docking" / f"ligand_{ligand_index}"
+        if not docking_dir.exists():
+            return jsonify({"success": False, "error": "Docking results not found for this ligand"}), 404
+
+        struct_type = request.args.get("type", "original")
+        if struct_type == "original":
+            pdb_path = docking_dir / "original_ligand.pdb"
+        else:
+            mode_index = int(request.args.get("mode_index", "0"))
+            if mode_index <= 0:
+                return jsonify({"success": False, "error": "mode_index must be positive for pose"}), 400
+            pdb_path = docking_dir / f"ligand_{ligand_index}_mode{mode_index}_h.pdb"
+
+        if not pdb_path.exists():
+            return jsonify({"success": False, "error": f"PDB file not found: {pdb_path.name}"}), 404
+
+        content = pdb_path.read_text()
+        return jsonify({"success": True, "content": content})
+    except Exception as e:
+        logger.error(f"Error getting docking structure: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/docking/get-config', methods=['GET'])
+def get_docking_config():
+    """
+    Get Vina config file for a ligand.
+    Query parameters:
+      - ligand_index: 1-based index of ligand
+    """
+    try:
+        ligand_index = int(request.args.get("ligand_index", "0"))
+        if ligand_index <= 0:
+            return jsonify({"success": False, "error": "Invalid ligand_index"}), 400
+
+        docking_dir = OUTPUT_DIR / "docking"
+        docking_dir.mkdir(parents=True, exist_ok=True)
+        lig_dir = docking_dir / f"ligand_{ligand_index}"
+        lig_dir.mkdir(parents=True, exist_ok=True)
+        
+        config_file = lig_dir / "vina_config.txt"
+        
+        # If config doesn't exist, generate default
+        if not config_file.exists():
+            # Get ligand PDB to compute center
+            ligand_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_obabel_*.pdb"))
+            if not ligand_files:
+                ligand_files = sorted(
+                    [f for f in OUTPUT_DIR.glob("4_ligands_corrected_*.pdb") if "_obabel_" not in f.name]
+                )
+            
+            if ligand_index <= len(ligand_files):
+                lig_pdb = ligand_files[ligand_index - 1]
+                cx, cy, cz = _compute_ligand_center(lig_pdb)
+            else:
+                cx, cy, cz = 0.0, 0.0, 0.0
+            
+            # Generate default config
+            default_config = f"""# AutoDock Vina Configuration File
+# Ligand {ligand_index}
+
+# Search space center (Angstroms)
+center_x = {cx:.2f}
+center_y = {cy:.2f}
+center_z = {cz:.2f}
+
+# Search space size (Angstroms)
+size_x = 18.0
+size_y = 18.0
+size_z = 18.0
+
+# Exhaustiveness of the global search (default: 8)
+# Higher values give better results but take longer
+exhaustiveness = 8
+
+# Number of binding modes to generate (default: 9)
+num_modes = 9
+
+# Maximum energy difference between the best binding mode and the worst one displayed (kcal/mol, default: 3)
+energy_range = 3
+
+# Optional: CPU usage (default: 0 = use all available CPUs)
+cpu = 0
+
+# Optional: Seed for random number generator (default: 0 = random)
+seed = 0
+"""
+            config_file.write_text(default_config)
+        
+        content = config_file.read_text()
+        return jsonify({"success": True, "content": content})
+    except Exception as e:
+        logger.error(f"Error getting docking config: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/docking/save-config', methods=['POST'])
+def save_docking_config():
+    """
+    Save Vina config file for a ligand.
+    Body: { "ligand_index": int, "content": str }
+    """
+    try:
+        data = request.get_json()
+        ligand_index = int(data.get("ligand_index", 0))
+        content = data.get("content", "")
+        
+        if ligand_index <= 0:
+            return jsonify({"success": False, "error": "Invalid ligand_index"}), 400
+        
+        if not content:
+            return jsonify({"success": False, "error": "Config content is required"}), 400
+        
+        docking_dir = OUTPUT_DIR / "docking"
+        docking_dir.mkdir(parents=True, exist_ok=True)
+        lig_dir = docking_dir / f"ligand_{ligand_index}"
+        lig_dir.mkdir(parents=True, exist_ok=True)
+        
+        config_file = lig_dir / "vina_config.txt"
+        config_file.write_text(content)
+        
+        return jsonify({"success": True, "message": f"Config saved for ligand {ligand_index}"})
+    except Exception as e:
+        logger.error(f"Error saving docking config: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/docking/get-protein', methods=['GET'])
+def get_docking_protein():
+    """
+    Return the prepared protein structure (tleap_ready.pdb) for the poses viewer.
+    """
+    try:
+        tleap_ready = OUTPUT_DIR / "tleap_ready.pdb"
+        if not tleap_ready.exists():
+            return jsonify({"success": False, "error": "Prepared structure not found"}), 404
+        
+        content = tleap_ready.read_text()
+        return jsonify({"success": True, "content": content})
+    except Exception as e:
+        logger.error(f"Error getting protein structure: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _validate_and_sanitize_ligand_name(resname: str) -> tuple[str, bool]:
+    """
+    Validate ligand residue name. If it's pure numeric, convert to a 3-letter code.
+    PDB format requires 3-letter residue names (exactly 3 characters).
+    Returns: (sanitized_name, was_changed)
+    """
+    if not resname:
+        return "LIG", True
+    
+    # Check if resname is pure numeric
+    if resname.isdigit():
+        # Convert numeric name to a 3-letter code
+        # Strategy: Use "L" + last 2 digits (e.g., 478 -> "L78", 5 -> "L05")
+        num = int(resname)
+        # Use modulo 100 to get last 2 digits, then format as 2-digit string
+        last_two = num % 100
+        sanitized = f"L{last_two:02d}"  # L00, L01, ..., L05, ..., L78, ..., L99
+        
+        return sanitized, True
+    
+    # Ensure it's exactly 3 characters (pad or truncate if needed)
+    resname_stripped = resname.strip()
+    if len(resname_stripped) != 3:
+        if len(resname_stripped) < 3:
+            # Pad with spaces on the right (PDB format is right-justified)
+            sanitized = f"{resname_stripped:>3}"
+        else:
+            # Truncate to 3 characters
+            sanitized = resname_stripped[:3]
+        
+        if sanitized != resname_stripped:
+            return sanitized, True
+    
+    return resname_stripped, False
+
+
+def _update_pdb_residue_name(pdb_path: Path, old_resname: str, new_resname: str):
+    """
+    Update all residue names in a PDB file from old_resname to new_resname.
+    Only updates ATOM and HETATM records.
+    """
+    try:
+        content = pdb_path.read_text()
+        lines = content.split('\n')
+        updated_lines = []
+        updated = False
+        
+        for line in lines:
+            if line.startswith(('ATOM', 'HETATM')):
+                # Extract current residue name (columns 18-20, 0-indexed: 17-20)
+                current_resname = line[17:20].strip()
+                if current_resname == old_resname:
+                    # Replace the residue name (columns 17-20, right-justified)
+                    new_line = line[:17] + f"{new_resname:>3}" + line[20:]
+                    updated_lines.append(new_line)
+                    updated = True
+                else:
+                    updated_lines.append(line)
+            else:
+                updated_lines.append(line)
+        
+        if updated:
+            pdb_path.write_text('\n'.join(updated_lines))
+        return updated
+    except Exception as e:
+        logger.warning(f"Failed to update residue name in {pdb_path}: {e}")
+        return False
+
+
+def validate_and_sanitize_all_ligand_files():
+    """
+    Validate and sanitize all ligand PDB files in the output directory.
+    This should be called early in the workflow to ensure consistency.
+    Returns list of warnings about name changes in format: [(old_name, new_name, filename), ...]
+    """
+    warnings = []
+    try:
+        # Find all corrected ligand files
+        ligand_files = sorted([f for f in OUTPUT_DIR.glob('4_ligands_corrected_*.pdb') if "_obabel_" not in f.name])
+        
+        if not ligand_files:
+            # Check for single ligand file
+            single_lig_file = OUTPUT_DIR / '4_ligands_corrected.pdb'
+            if single_lig_file.exists():
+                ligand_files = [single_lig_file]
+        
+        for lig_file in ligand_files:
+            # Read the file first to get original name
+            original_resname = None
+            with open(lig_file, 'r') as f:
+                for line in f:
+                    if line.startswith(('ATOM', 'HETATM')):
+                        original_resname = line[17:20].strip()
+                        break
+            
+            if original_resname:
+                # Check if it's numeric
+                if original_resname.isdigit():
+                    # Get sanitized name
+                    sanitized_name, was_changed = _validate_and_sanitize_ligand_name(original_resname)
+                    if was_changed:
+                        # Update the file
+                        _update_pdb_residue_name(lig_file, original_resname, sanitized_name)
+                        warnings.append((original_resname, sanitized_name, lig_file.name))
+                else:
+                    # Still validate to ensure 3-letter format
+                    sanitized_name, was_changed = _validate_and_sanitize_ligand_name(original_resname)
+                    if was_changed and sanitized_name != original_resname:
+                        _update_pdb_residue_name(lig_file, original_resname, sanitized_name)
+                        warnings.append((original_resname, sanitized_name, lig_file.name))
+        
+        # Also validate tleap_ready.pdb if it exists
+        tleap_ready = OUTPUT_DIR / "tleap_ready.pdb"
+        if tleap_ready.exists():
+            # Collect original names from tleap_ready.pdb
+            original_names = {}
+            with open(tleap_ready, 'r') as f:
+                for line in f:
+                    if line.startswith('HETATM'):
+                        resname = line[17:20].strip()
+                        if resname and resname not in ['HOH', 'WAT', 'TIP', 'SPC', 'NA', 'CL']:
+                            if resname not in original_names:
+                                original_names[resname] = True
+            
+            # Validate each unique name
+            for original_resname in original_names.keys():
+                if original_resname.isdigit():
+                    sanitized_name, was_changed = _validate_and_sanitize_ligand_name(original_resname)
+                    if was_changed:
+                        _update_pdb_residue_name(tleap_ready, original_resname, sanitized_name)
+                        warnings.append((original_resname, sanitized_name, tleap_ready.name))
+        
+    except Exception as e:
+        logger.warning(f"Error validating ligand files: {e}")
+    
+    return warnings
+
+
+def _get_ligand_info_from_pdb(pdb_path: Path, sanitize: bool = True):
+    """
+    Extract residue name and chain ID from a ligand PDB file.
+    If sanitize=True, validates and updates numeric residue names in the file.
+    """
+    resname = "UNK"
+    chain = "A"
+    with open(pdb_path, 'r') as f:
+        for line in f:
+            if line.startswith(('ATOM', 'HETATM')):
+                # PDB format: residue name is columns 18-20, chain is column 22
+                resname = line[17:20].strip()
+                chain = line[21:22].strip() or "A"
+                break
+    
+        # Validate and sanitize if needed
+        if sanitize:
+            sanitized_name, was_changed = _validate_and_sanitize_ligand_name(resname)
+            if was_changed:
+                original_name = resname
+                logger.warning(
+                    f"Ligand residue name '{original_name}' in {pdb_path.name} is pure numeric. "
+                    f"Changed to '{sanitized_name}' (3-letter code) to avoid errors. "
+                    f"The PDB file has been updated."
+                )
+                _update_pdb_residue_name(pdb_path, resname, sanitized_name)
+                resname = sanitized_name
+    
+    return resname, chain
+
+
+@app.route('/api/docking/get-ligand-boxes', methods=['GET'])
+def get_ligand_boxes():
+    """
+    Return default ligand box suggestions (center and size) for each corrected ligand.
+    Also returns ligand name (residue name) and chain ID for display.
+    Center is computed from 4_ligands_corrected_obabel_*.pdb using MDAnalysis, size defaults to 10 Å cube.
+    """
+    try:
+        # Use obabel versions for better atom naming compatibility
+        ligand_files = sorted(OUTPUT_DIR.glob("4_ligands_corrected_obabel_*.pdb"))
+        if not ligand_files:
+            # Fallback to non-obabel files
+            ligand_files = sorted(
+                [f for f in OUTPUT_DIR.glob("4_ligands_corrected_*.pdb") if "_obabel_" not in f.name]
+            )
+        
+        # Also get chain information from prepared structure
+        chains = []
+        tleap_ready = OUTPUT_DIR / "tleap_ready.pdb"
+        if tleap_ready.exists():
+            seen_chains = set()
+            with open(tleap_ready, 'r') as f:
+                for line in f:
+                    if line.startswith(('ATOM', 'HETATM')):
+                        chain = line[21:22].strip() or "A"
+                        if chain not in seen_chains:
+                            seen_chains.add(chain)
+                            chains.append(chain)
+        
+        ligands = []
+        for idx, lig_pdb in enumerate(ligand_files, start=1):
+            try:
+                cx, cy, cz = _compute_ligand_center(lig_pdb)
+                resname, chain = _get_ligand_info_from_pdb(lig_pdb)
+                ligands.append(
+                    {
+                        "index": idx,
+                        "name": resname,
+                        "chain": chain,
+                        "center": {"x": cx, "y": cy, "z": cz},
+                        "size": {"x": 10.0, "y": 10.0, "z": 10.0},
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Failed to compute center for {lig_pdb}: {e}")
+                continue
+
+        return jsonify({"success": True, "ligands": ligands, "chains": sorted(chains)})
+    except Exception as e:
+        logger.error(f"Error computing ligand boxes: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/docking/apply', methods=['POST'])
+def apply_docking_poses():
+    """
+    Apply user-selected docked poses by replacing the corresponding
+    4_ligands_corrected_*.pdb files and rebuilding tleap_ready.pdb.
+    Request JSON:
+      {
+        "selections": [
+          {"ligand_index": 1, "choice": "original"},
+          {"ligand_index": 2, "choice": "mode", "mode_index": 1},
+          ...
+        ]
+      }
+    """
+    try:
+        data = request.get_json() or {}
+        selections = data.get("selections", [])
+        if not isinstance(selections, list) or not selections:
+            return jsonify({"success": False, "error": "No selections provided"}), 400
+
+        protein_capped = OUTPUT_DIR / "2_protein_with_caps.pdb"
+        if not protein_capped.exists():
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "2_protein_with_caps.pdb not found. Run structure preparation first.",
+                }
+            ), 400
+
+        # Update ligand files according to selections
+        updated_indices = []
+        for sel in selections:
+            try:
+                lig_index = int(sel.get("ligand_index", 0))
+                choice = sel.get("choice", "original")
+                if lig_index <= 0:
+                    continue
+
+                corrected_path = OUTPUT_DIR / f"4_ligands_corrected_{lig_index}.pdb"
+                if not corrected_path.exists():
+                    continue
+
+                if choice == "original":
+                    # Nothing to change for this ligand
+                    continue
+
+                if choice == "mode":
+                    mode_index = int(sel.get("mode_index", 0))
+                    if mode_index <= 0:
+                        continue
+                    
+                    # Use the sanitized pose file (already processed with h_add and sanitized)
+                    sanitized_pose = (
+                        OUTPUT_DIR
+                        / "docking"
+                        / f"ligand_{lig_index}"
+                        / f"ligand_{lig_index}_mode{mode_index}_sanitized.pdb"
+                    )
+                    
+                    # Fallback to pose with hydrogens if sanitized doesn't exist
+                    if not sanitized_pose.exists():
+                        sanitized_pose = (
+                            OUTPUT_DIR
+                            / "docking"
+                            / f"ligand_{lig_index}"
+                            / f"ligand_{lig_index}_mode{mode_index}_h.pdb"
+                        )
+                    
+                    if not sanitized_pose.exists():
+                        logger.warning(f"Docking pose not found: {sanitized_pose}")
+                        continue
+
+                    # Copy sanitized pose over corrected ligand
+                    corrected_path.write_text(sanitized_pose.read_text())
+                    updated_indices.append(lig_index)
+            except Exception as e:
+                logger.warning(f"Error applying selection {sel}: {str(e)}")
+
+        # Rebuild tleap_ready.pdb using updated ligand files (if any)
+        tleap_ready = OUTPUT_DIR / "tleap_ready.pdb"
+        ligand_groups = []
+        ligand_files = sorted(
+            [f for f in OUTPUT_DIR.glob("4_ligands_corrected_*.pdb") if "_obabel_" not in f.name]
+        )
+        for lig_pdb in ligand_files:
+            lines = [
+                line
+                for line in lig_pdb.read_text().splitlines(keepends=True)
+                if line.startswith(("ATOM", "HETATM"))
+            ]
+            if lines:
+                ligand_groups.append(lines)
+
+        if ligand_groups:
+            ok = merge_protein_and_ligand(
+                str(protein_capped), None, str(tleap_ready), ligand_groups=ligand_groups
+            )
+            if not ok:
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": "Failed to merge protein and updated ligands into tleap_ready.pdb",
+                    }
+                ), 500
+
+        return jsonify(
+            {
+                "success": True,
+                "updated_ligands": updated_indices,
+                "tleap_ready": str(tleap_ready.relative_to(OUTPUT_DIR)) if tleap_ready.exists() else None,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error applying docking poses: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 def _format_log(message, log_type='info'):
     """Helper function to format log message for SSE"""
@@ -1248,6 +3130,11 @@ def generate_ligand_ff():
             
             yield _format_log(f"Found {len(ligand_files)} ligand file(s) to process")
             
+            # Validate and sanitize all ligand files first (early validation)
+            # This ensures numeric ligand names are converted to LIG{number} format
+            validate_and_sanitize_all_ligand_files()
+            yield _format_log("Validated ligand residue names (numeric names converted to LIG{number} format if needed)")
+            
             import re
             processed_ligands = []
             errors = []
@@ -1263,8 +3150,8 @@ def generate_ligand_ff():
                 if match:
                     ligand_num = int(match.group(1))
                 
-                # Extract residue name from this ligand file
-                resname = get_residue_name_from_pdb(ligand_pdb)
+                # Extract residue name from this ligand file (already sanitized by validate function)
+                resname = get_residue_name_from_pdb(ligand_pdb, sanitize=True)
                 if not resname:
                     yield _format_log(f"Warning: Could not extract residue name from {ligand_pdb.name}, using LIG{ligand_num}", 'warning')
                     resname = f"LIG{ligand_num}"
@@ -1892,11 +3779,11 @@ module load amber/24
             content += "module load plumed/2.9.1\n"
         
         content += """
-pmemd.cuda -O -i min_restrained.in -o min_restrained.out -p protein.prmtop -c protein.inpcrd -r min_res.ncrst -x min_res.nc -ref Leu15_Glu15.inpcrd -inf min_res.mdinfo
+pmemd.cuda -O -i min_restrained.in -o min_restrained.out -p protein.prmtop -c protein.inpcrd -r min_res.ncrst -x min_res.nc -ref protein.inpcrd -inf min_res.mdinfo
 pmemd.cuda -O -i min.in -o min.out -p protein.prmtop -c min_res.ncrst -r min.ncrst -x min.nc -inf min.mdinfo
 pmemd.cuda -O -i HeatNPT.in -o HeatNPT.out -p protein.prmtop -c min.ncrst -r HeatNPT.ncrst -x HeatNPT.nc -inf HeatNPT.mdinfo
-pmemd.cuda -O -i mdin_equi.in -o mdin_equi.out -p protein.prmtop -c HeatNPT.ncrst -r mdin_equi.ncrst -x mdin_equi.nc -inf mdin_equi.mdinfo -ref HeatNPT.ncrst
-pmemd.cuda -O -i mdin_prod.in -o mdin_prod.out -p protein.prmtop -c mdin_equi.ncrst -r mdin_prod.ncrst -x mdin_prod.nc -inf mdin_prod.mdinfo -ref mdin_equi.ncrst
+pmemd.cuda -O -i mdin_equi.in -o mdin_equi.out -p protein.prmtop -c HeatNPT.ncrst -r mdin_equi.ncrst -x mdin_equi.nc -inf mdin_equi.mdinfo -ref protein.inpcrd
+pmemd.cuda -O -i mdin_prod.in -o mdin_prod.out -p protein.prmtop -c mdin_equi.ncrst -r mdin_prod.ncrst -x mdin_prod.nc -inf mdin_prod.mdinfo -ref protein.inpcrd
 """
         
         # Write submit_job.pbs file
@@ -2023,16 +3910,26 @@ def get_generated_files():
             'generate_ff_parameters.in',
             'sqm.in'
         ]
-        # Note: Force field parameter files (protein.prmtop, protein.inpcrd, protein_solvated.pdb) 
+        # Exclude ESMFold minimization intermediates: tleap_A.in, min_A.in, etc. (per-chain;
+        # keep min.in and min_restrained.in which are in files_to_read)
+        def _is_esmfold_minimization_file(name):
+            if name.startswith('tleap_') and name.endswith('.in'):
+                return True
+            # min_{chain}.in e.g. min_A.in, min_B.in (len 8: min_ + X + .in)
+            if name.startswith('min_') and name.endswith('.in') and len(name) == 8:
+                return True
+            return False
+        # Note: Force field parameter files (protein.prmtop, protein.inpcrd, protein_solvated.pdb)
         # are excluded from preview as they are binary/large files
-        
+
         # Also include any user-created .in files in the output directory
         user_created_files = []
         try:
             for file_path in OUTPUT_DIR.glob("*.in"):
                 filename = file_path.name
-                # Exclude standard files and utility files
-                if filename not in files_to_read and filename not in excluded_files:
+                # Exclude standard files, utility files, and ESMFold minimization intermediates
+                if (filename not in files_to_read and filename not in excluded_files
+                        and not _is_esmfold_minimization_file(filename)):
                     user_created_files.append(filename)
         except Exception as e:
             logger.warning(f"Error scanning for user-created files: {e}")
@@ -2255,17 +4152,38 @@ def generate_ff_parameters_file(force_field, water_model, add_ions, distance):
     with open(OUTPUT_DIR / "generate_ff_parameters.in", 'w') as f:
         f.write(content)
 
-def get_residue_name_from_pdb(pdb_file):
-    """Extract residue name from a ligand PDB file"""
+def get_residue_name_from_pdb(pdb_file, sanitize: bool = True):
+    """
+    Extract residue name from a ligand PDB file.
+    If sanitize=True, validates and updates numeric residue names in the file.
+    """
     try:
+        residue_name = None
         with open(pdb_file, 'r') as f:
             for line in f:
                 if line.startswith(('ATOM', 'HETATM')):
                     # Extract residue name (columns 18-20)
                     residue_name = line[17:20].strip()
                     if residue_name and residue_name not in ['HOH', 'WAT', 'TIP', 'SPC', 'NA', 'CL']:
-                        return residue_name
-        return None
+                        break
+        
+        if not residue_name:
+            return None
+        
+        # Validate and sanitize if needed
+        if sanitize:
+            sanitized_name, was_changed = _validate_and_sanitize_ligand_name(residue_name)
+            if was_changed:
+                original_name = residue_name
+                logger.warning(
+                    f"Ligand residue name '{original_name}' in {Path(pdb_file).name} is pure numeric. "
+                    f"Changed to '{sanitized_name}' (3-letter code) to avoid errors. "
+                    f"The PDB file has been updated."
+                )
+                _update_pdb_residue_name(Path(pdb_file), residue_name, sanitized_name)
+                residue_name = sanitized_name
+        
+        return residue_name
     except Exception as e:
         logger.warning(f"Could not extract residue name from {pdb_file}: {e}")
         return None
@@ -2291,8 +4209,11 @@ def get_residue_name_from_mol2(mol2_file):
         logger.warning(f"Could not extract residue name from {mol2_file}: {e}")
         return None
 
-def get_all_ligand_residue_names():
-    """Extract all unique ligand residue names from tleap_ready.pdb"""
+def get_all_ligand_residue_names(sanitize: bool = True):
+    """
+    Extract all unique ligand residue names from tleap_ready.pdb.
+    If sanitize=True, validates and updates numeric residue names in the file.
+    """
     ligand_names = []
     try:
         tleap_ready_path = OUTPUT_DIR / "tleap_ready.pdb"
@@ -2300,6 +4221,9 @@ def get_all_ligand_residue_names():
             return []
         
         seen_residues = set()
+        residues_to_update = {}  # Track old_name -> new_name mappings
+        
+        # First pass: collect all residue names and validate them
         with open(tleap_ready_path, 'r') as f:
             for line in f:
                 if line.startswith('HETATM'):
@@ -2307,8 +4231,25 @@ def get_all_ligand_residue_names():
                     residue_name = line[17:20].strip()
                     if residue_name and residue_name not in ['HOH', 'WAT', 'TIP', 'SPC', 'NA', 'CL']:
                         if residue_name not in seen_residues:
+                            # Validate and sanitize if needed
+                            if sanitize:
+                                sanitized_name, was_changed = _validate_and_sanitize_ligand_name(residue_name)
+                                if was_changed:
+                                    residues_to_update[residue_name] = sanitized_name
+                                    residue_name = sanitized_name
+                            
                             ligand_names.append(residue_name)
                             seen_residues.add(residue_name)
+        
+        # Update tleap_ready.pdb if any residue names were changed
+        if sanitize and residues_to_update:
+            for old_name, new_name in residues_to_update.items():
+                logger.warning(
+                    f"Ligand residue name '{old_name}' in tleap_ready.pdb is pure numeric. "
+                    f"Changed to '{new_name}' (3-letter code) to avoid errors. "
+                    f"The PDB file has been updated."
+                )
+                _update_pdb_residue_name(tleap_ready_path, old_name, new_name)
         
         return ligand_names
     except Exception as e:
@@ -2567,101 +4508,125 @@ def trim_residues_endpoint():
         }), 500
 
 @app.route('/api/build-completed-structure', methods=['POST'])
+@stream_with_context
 def build_completed_structure_endpoint():
-    """Build completed structure using ESMFold for selected chains"""
-    try:
-        data = request.get_json()
-        selected_chains = data.get('selected_chains', [])
-        
-        if not selected_chains:
-            return jsonify({
-                'success': False,
-                'error': 'No chains selected for completion'
-            }), 400
-        
-        # Check if original input file exists
-        original_pdb_path = OUTPUT_DIR / "0_original_input.pdb"
-        if not original_pdb_path.exists():
-            return jsonify({
-                'success': False,
-                'error': 'No PDB file loaded. Please load a PDB file first.'
-            }), 400
-        
-        # Get PDB ID
+    """Build completed structure using ESMFold for selected chains with streaming logs"""
+    def generate():
         try:
-            pdb_id = get_pdb_id_from_pdb_file(str(original_pdb_path))
-        except ValueError as e:
-            return jsonify({
-                'success': False,
-                'error': f'Could not determine PDB ID: {str(e)}'
-            }), 400
-        
-        # Get chain sequences (use provided sequences if available, otherwise fetch)
-        provided_sequences = data.get('chain_sequences', None)
-        if provided_sequences:
-            chain_sequences = provided_sequences
-            logger.info("Using provided chain sequences (may be trimmed)")
-        else:
-            chain_sequences = get_chain_sequences(pdb_id)
-        
-        # Verify selected chains have sequences
-        chains_to_process = []
-        for chain in selected_chains:
-            if chain in chain_sequences:
-                chains_to_process.append(chain)
-            else:
-                logger.warning(f"Chain {chain} not found in chain sequences")
-        
-        if not chains_to_process:
-            return jsonify({
-                'success': False,
-                'error': 'None of the selected chains have sequences available'
-            }), 400
-        
-        # Create dictionary of chains with their sequences for FASTA writing
-        chains_with_missing = {
-            chain: chain_sequences[chain]
-            for chain in chains_to_process
-        }
-        
-        # Write FASTA file for the selected chains
-        try:
-            write_fasta_for_missing_chains(pdb_id, chains_with_missing, output_dir=str(OUTPUT_DIR))
-            logger.info(f"Wrote FASTA file for chains: {chains_to_process}")
-        except Exception as e:
-            logger.warning(f"Could not write FASTA file: {str(e)}")
-            # Don't fail the entire operation if FASTA writing fails
-        
-        # Run ESMFold for each selected chain
-        esmfold_results = {}
-        for chain in chains_to_process:
-            logger.info(f"Running ESMFold for chain {chain}")
-            seq = chain_sequences[chain]
-            try:
-                pdb_text = run_esmfold(seq)
-                esmfold_results[chain] = pdb_text
-                
-                # Save each chain's ESMFold result
-                esm_pdb_filename = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold.pdb"
-                with open(esm_pdb_filename, 'w') as f:
-                    f.write(pdb_text)
-                logger.info(f"Saved ESMFold result for chain {chain} to {esm_pdb_filename}")
-            except Exception as e:
-                logger.error(f"Error running ESMFold for chain {chain}: {str(e)}")
-                return jsonify({
-                    'success': False,
-                    'error': f'ESMFold failed for chain {chain}: {str(e)}'
-                }), 500
-        
-        # Rebuild PDB using PyMOL
-        output_pdb = OUTPUT_DIR / "0_complete_structure.pdb"
-        try:
-            # Use subprocess to run PyMOL in a separate process to avoid conflicts
-            import tempfile
-            import os
+            data = request.get_json()
+            selected_chains = data.get('selected_chains', [])
             
-            # Create a standalone script that runs PyMOL operations
-            script_content = f"""#!/usr/bin/env python3
+            if not selected_chains:
+                yield _format_log('❌ No chains selected for completion', 'error')
+                yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': 'No chains selected for completion'})}\n\n"
+                return
+            
+            yield _format_log(f"Starting ESMFold structure completion for chains: {', '.join(selected_chains)}")
+            
+            # Check if original input file exists
+            original_pdb_path = OUTPUT_DIR / "0_original_input.pdb"
+            if not original_pdb_path.exists():
+                yield _format_log('❌ No PDB file loaded. Please load a PDB file first.', 'error')
+                yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': 'No PDB file loaded. Please load a PDB file first.'})}\n\n"
+                return
+            # Use true crystal for alignment and rebuild: 0_original_input_backup if it exists (before set-use-completed overwrote 0_original_input), else 0_original_input
+            original_for_align = OUTPUT_DIR / "0_original_input_backup.pdb"
+            original_for_align = original_for_align if original_for_align.exists() else original_pdb_path
+
+            # Get PDB ID
+            try:
+                pdb_id = get_pdb_id_from_pdb_file(str(original_pdb_path))
+                yield _format_log(f"Detected PDB ID: {pdb_id}")
+            except ValueError as e:
+                yield _format_log(f'❌ Could not determine PDB ID: {str(e)}', 'error')
+                yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': f'Could not determine PDB ID: {str(e)}'})}\n\n"
+                return
+            
+            # Get chain sequences (use provided sequences if available, otherwise fetch)
+            provided_sequences = data.get('chain_sequences', None)
+            if provided_sequences:
+                chain_sequences = provided_sequences
+                yield _format_log("Using provided chain sequences (may be trimmed)")
+            else:
+                yield _format_log("Fetching chain sequences from PDB database...")
+                chain_sequences = get_chain_sequences(pdb_id)
+            
+            # Verify selected chains have sequences
+            chains_to_process = []
+            for chain in selected_chains:
+                if chain in chain_sequences:
+                    chains_to_process.append(chain)
+                else:
+                    yield _format_log(f"⚠️ Chain {chain} not found in chain sequences", 'warning')
+            
+            if not chains_to_process:
+                yield _format_log('❌ None of the selected chains have sequences available', 'error')
+                yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': 'None of the selected chains have sequences available'})}\n\n"
+                return
+            
+            # Create dictionary of chains with their sequences for FASTA writing
+            chains_with_missing = {
+                chain: chain_sequences[chain]
+                for chain in chains_to_process
+            }
+            
+            # Write FASTA file for the selected chains
+            try:
+                write_fasta_for_missing_chains(pdb_id, chains_with_missing, output_dir=str(OUTPUT_DIR))
+                yield _format_log(f"Wrote FASTA file for chains: {chains_to_process}")
+            except Exception as e:
+                yield _format_log(f"⚠️ Could not write FASTA file: {str(e)}", 'warning')
+                # Don't fail the entire operation if FASTA writing fails
+            
+            # Run ESMFold for each selected chain
+            esmfold_results = {}
+            for chain in chains_to_process:
+                yield _format_log(f"Running ESMFold for chain {chain}...")
+                seq = chain_sequences[chain]
+                try:
+                    pdb_text = run_esmfold(seq)
+                    esmfold_results[chain] = pdb_text
+                    
+                    # Save each chain's ESMFold result
+                    esm_pdb_filename = OUTPUT_DIR / f"{pdb_id}_chain_{chain}_esmfold.pdb"
+                    with open(esm_pdb_filename, 'w') as f:
+                        f.write(pdb_text)
+                    yield _format_log(f"✅ ESMFold completed for chain {chain}: {esm_pdb_filename.name}")
+                except Exception as e:
+                    yield _format_log(f'❌ ESMFold failed for chain {chain}: {str(e)}', 'error')
+                    yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': f'ESMFold failed for chain {chain}: {str(e)}'})}\n\n"
+                    return
+            
+            # Minimization (before rebuild): minimized PDBs will be superimposed in rebuild
+            minimize_chains = data.get('minimize_chains', False)
+            chains_to_minimize = data.get('chains_to_minimize', [])
+            minimized_chains = []
+            if minimize_chains and chains_to_minimize:
+                yield _format_log(f"\n{'='*60}")
+                yield _format_log(f"Starting energy minimization for chains: {', '.join(chains_to_minimize)}")
+                yield _format_log(f"{'='*60}")
+                try:
+                    for chain in chains_to_minimize:
+                        yield _format_log(f"\nMinimizing chain {chain}...")
+                        for log_line in _minimize_esmfold_chains_streaming(pdb_id, [chain], original_for_align=original_for_align):
+                            yield log_line
+                        minimized_chains.append(chain)
+                        yield _format_log(f"✅ Chain {chain} minimization completed")
+                    min_status_file = OUTPUT_DIR / ".chains_minimized"
+                    with open(min_status_file, 'w') as f:
+                        f.write(','.join(minimized_chains))
+                    yield _format_log(f"\n✅ All chains minimized successfully: {', '.join(minimized_chains)}")
+                except Exception as e:
+                    yield _format_log(f'❌ Error during minimization: {str(e)}', 'error')
+            
+            # Rebuild PDB using PyMOL (aligns ESMFold or minimized chains to original, then merges)
+            output_pdb = OUTPUT_DIR / "0_complete_structure.pdb"
+            yield _format_log("Rebuilding structure with PyMOL (superimposing to original)...")
+            try:
+                import tempfile
+                import os
+                chains_use_min_arg = repr(minimized_chains) if minimized_chains else "None"
+                script_content = f"""#!/usr/bin/env python3
 import sys
 import os
 
@@ -2679,7 +4644,8 @@ try:
         r'{pdb_id}',
         {repr(chains_to_process)},
         output_pdb=r'{output_pdb.name}',
-        original_pdb_path=r'{Path(original_pdb_path).name}'
+        original_pdb_path=r'{Path(original_for_align).name}',
+        chains_use_minimized={chains_use_min_arg}
     )
     print("SUCCESS: Rebuild completed")
 except Exception as e:
@@ -2688,81 +4654,176 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 """
-            
-            # Write script to temporary file
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as script_file:
-                script_file.write(script_content)
-                script_path = script_file.name
-            
-            try:
-                # Make script executable
-                os.chmod(script_path, 0o755)
                 
-                # Run script in subprocess
-                result = subprocess.run(
-                    [sys.executable, script_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                    cwd=str(OUTPUT_DIR)
-                )
+                # Write script to temporary file
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as script_file:
+                    script_file.write(script_content)
+                    script_path = script_file.name
                 
-                if result.returncode != 0:
-                    error_msg = result.stderr or result.stdout
-                    logger.error(f"PyMOL rebuild failed: {error_msg}")
-                    # Check if it's a PyMOL initialization issue
-                    if "pymol" in error_msg.lower() or "import" in error_msg.lower():
-                        raise Exception(f"PyMOL initialization failed. Make sure PyMOL is installed and accessible. Error: {error_msg}")
-                    raise Exception(f"Rebuild failed: {error_msg}")
-                
-                if "ERROR:" in result.stdout:
-                    error_line = [line for line in result.stdout.split('\\n') if 'ERROR:' in line]
-                    if error_line:
-                        raise Exception(error_line[0].replace('ERROR:', '').strip())
-                
-                if not output_pdb.exists():
-                    raise Exception("Output file was not created")
-                
-                logger.info(f"Completed structure saved to {output_pdb}")
-                
-            finally:
-                # Clean up temporary script
                 try:
-                    os.unlink(script_path)
-                except:
-                    pass
+                    # Make script executable
+                    os.chmod(script_path, 0o755)
                     
-        except subprocess.TimeoutExpired:
-            logger.error("PyMOL rebuild timed out after 5 minutes")
-            return jsonify({
-                'success': False,
-                'error': 'PyMOL rebuild timed out. The structure might be too large. Please try again.'
-            }), 500
+                    # Run script in subprocess
+                    result = subprocess.run(
+                        [sys.executable, script_path],
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        cwd=str(OUTPUT_DIR)
+                    )
+                    
+                    if result.returncode != 0:
+                        error_msg = result.stderr or result.stdout
+                        yield _format_log(f"❌ PyMOL rebuild failed: {error_msg}", 'error')
+                        # Check if it's a PyMOL initialization issue
+                        if "pymol" in error_msg.lower() or "import" in error_msg.lower():
+                            error_msg = f"PyMOL initialization failed. Make sure PyMOL is installed and accessible. Error: {error_msg}"
+                        else:
+                            error_msg = f"Rebuild failed: {error_msg}"
+                        yield _format_log(f"❌ {error_msg}", 'error')
+                        yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': error_msg})}\n\n"
+                        return
+                    
+                    if "ERROR:" in result.stdout:
+                        error_line = [line for line in result.stdout.split('\\n') if 'ERROR:' in line]
+                        if error_line:
+                            error_msg = error_line[0].replace('ERROR:', '').strip()
+                            yield _format_log(f"❌ {error_msg}", 'error')
+                            yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': error_msg})}\n\n"
+                            return
+                    
+                    if not output_pdb.exists():
+                        error_msg = "Output file was not created"
+                        yield _format_log(f"❌ {error_msg}", 'error')
+                        yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': error_msg})}\n\n"
+                        return
+                    
+                    yield _format_log(f"✅ Completed structure saved to {output_pdb.name}")
+                
+                except subprocess.TimeoutExpired:
+                    yield _format_log("❌ PyMOL rebuild timed out after 5 minutes", 'error')
+                    yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': 'PyMOL rebuild timed out. The structure might be too large. Please try again.'})}\n\n"
+                    return
+                except Exception as e:
+                    yield _format_log(f"❌ Error rebuilding PDB: {str(e)}", 'error')
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': f'Failed to rebuild structure: {str(e)}'})}\n\n"
+                    return
+                finally:
+                    # Clean up temporary script
+                    try:
+                        os.unlink(script_path)
+                    except:
+                        pass
+            except Exception as e:
+                yield _format_log(f"❌ Error in PyMOL rebuild: {str(e)}", 'error')
+                yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': f'PyMOL rebuild failed: {str(e)}'})}\n\n"
+                return
+            
+            # Read the completed structure (includes superimposed minimized chains when minimization was used)
+            with open(output_pdb, 'r') as f:
+                completed_content = f.read()
+            
+            chains_str = ', '.join(chains_to_process)
+            yield _format_log(f"\n✅ Structure completion finished for chains: {chains_str}")
+            
+            result_message = f'Successfully completed structure for chains: {chains_str}'
+            result_data = {
+                'type': 'complete',
+                'success': True,
+                'message': result_message,
+                'completed_chains': chains_to_process,
+                'completed_structure': completed_content,
+                'minimized_chains': minimized_chains
+            }
+            yield f"data: {json.dumps(result_data)}\n\n"
+            
         except Exception as e:
-            logger.error(f"Error rebuilding PDB: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return jsonify({
-                'success': False,
-                'error': f'Failed to rebuild structure: {str(e)}'
-            }), 500
+            logger.error(f"Error building completed structure: {str(e)}")
+            yield _format_log(f'❌ Error: {str(e)}', 'error')
+            yield f"data: {json.dumps({'type': 'complete', 'success': False, 'error': f'Failed to build completed structure: {str(e)}'})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream')
+
+@app.route('/api/set-use-completed-structure', methods=['POST'])
+def set_use_completed_structure():
+    """Set user preference to use completed structure (ESMFold) instead of original"""
+    try:
+        data = request.get_json()
+        use_completed = data.get('use_completed', False)
         
-        # Read the completed structure
-        with open(output_pdb, 'r') as f:
-            completed_content = f.read()
+        # Create a flag file to indicate user wants to use completed structure
+        flag_file = OUTPUT_DIR / ".use_completed_structure"
+        
+        if use_completed:
+            # User wants to use completed structure - create flag file
+            flag_file.touch()
+            logger.info("User chose to use ESMFold-completed structure")
+            
+            # Also replace the original input with completed structure for consistency
+            completed_pdb_path = OUTPUT_DIR / "0_complete_structure.pdb"
+            original_pdb_path = OUTPUT_DIR / "0_original_input.pdb"
+            
+            if completed_pdb_path.exists():
+                import shutil
+                # Backup original if it doesn't exist as backup
+                backup_path = OUTPUT_DIR / "0_original_input_backup.pdb"
+                if original_pdb_path.exists() and not backup_path.exists():
+                    shutil.copy2(original_pdb_path, backup_path)
+                
+                # Replace original with completed structure
+                shutil.copy2(completed_pdb_path, original_pdb_path)
+                logger.info(f"Replaced {original_pdb_path} with completed structure")
+        else:
+            # User doesn't want to use completed structure - remove flag
+            if flag_file.exists():
+                flag_file.unlink()
+            
+            # Restore original structure from backup if it exists
+            backup_path = OUTPUT_DIR / "0_original_input_backup.pdb"
+            original_pdb_path = OUTPUT_DIR / "0_original_input.pdb"
+            
+            if backup_path.exists() and original_pdb_path.exists():
+                import shutil
+                # Check if current original is the completed structure (by comparing with completed)
+                completed_pdb_path = OUTPUT_DIR / "0_complete_structure.pdb"
+                if completed_pdb_path.exists():
+                    # Restore original from backup
+                    shutil.copy2(backup_path, original_pdb_path)
+                    logger.info(f"Restored original structure from backup")
+            
+            logger.info("User chose to use original structure")
         
         return jsonify({
             'success': True,
-            'message': f'Successfully completed structure for chains: {", ".join(chains_to_process)}',
-            'completed_chains': chains_to_process,
-            'completed_structure': completed_content
+            'use_completed': use_completed
         })
         
     except Exception as e:
-        logger.error(f"Error building completed structure: {str(e)}")
+        logger.error(f"Error setting use completed structure preference: {str(e)}")
         return jsonify({
             'success': False,
-            'error': f'Failed to build completed structure: {str(e)}'
+            'error': str(e)
+        }), 500
+
+@app.route('/api/get-use-completed-structure', methods=['GET'])
+def get_use_completed_structure():
+    """Get user preference for using completed structure"""
+    try:
+        flag_file = OUTPUT_DIR / ".use_completed_structure"
+        use_completed = flag_file.exists()
+        
+        return jsonify({
+            'success': True,
+            'use_completed': use_completed
+        })
+    except Exception as e:
+        logger.error(f"Error getting use completed structure preference: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 500
 
 @app.route('/api/get-completed-structure', methods=['GET'])
