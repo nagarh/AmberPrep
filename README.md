@@ -33,36 +33,60 @@ For RCSB structures, the pipeline parses the header and HETATM as provided; for 
 
 ---
 
+## Quick Start
+
+Try AmberFlow instantly on Hugging Face Spaces (no installation required):
+
+**[https://huggingface.co/spaces/hemantn/AmberFlow](https://huggingface.co/spaces/hemantn/AmberFlow)**
+
+---
+
 ## Installation
+
+### Prerequisites
+
+AmberFlow requires scientific packages that are only available via **conda** (not PyPI). You must install these first:
+
+| Package | Purpose |
+|---------|---------|
+| `ambertools` | AMBER MD tools (tleap, antechamber, sander) |
+| `pymol-open-source` | Structure visualization and editing |
+| `vina` | AutoDock Vina molecular docking |
+| `openbabel` | Molecule format conversion |
+| `rdkit` | Cheminformatics toolkit |
+| `gemmi` | Structure file parsing (required by Meeko) |
+
+---
 
 ### Option 1: pip install (recommended)
 
-AmberFlow requires some conda packages (AMBER tools, PyMOL, Vina) that are not available on PyPI. Install them first, then install AmberFlow via pip:
-
 ```bash
 # Step 1: Create conda environment with required tools
-conda create -n amberflow python=3.11
+conda create -n amberflow python=3.11 -y
 conda activate amberflow
-conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi
 
-# Step 2: Install AmberFlow from PyPI
+# Step 2: Install conda-only dependencies
+conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi -y
+
+# Step 3: Install AmberFlow from PyPI
 pip install amberflow
 
-# Step 3: Run the web app
+# Step 4: Run the web app
 amberflow
 ```
 
-The app will be available at `http://localhost:7860`.
+Open your browser at **http://localhost:7860**
 
-### Option 2: Docker
+---
 
+### Option 2: Docker (no conda/pip needed)
+
+**Using pre-built image:**
 ```bash
-docker pull hemantn/amberflow  # or build locally
 docker run -p 7860:7860 hemantn/amberflow
 ```
 
-Or build from source:
-
+**Or build from source:**
 ```bash
 git clone https://github.com/nagarh/AmberFlow.git
 cd AmberFlow
@@ -70,26 +94,44 @@ docker build -t amberflow .
 docker run -p 7860:7860 amberflow
 ```
 
-### Option 3: Development install
+Open your browser at **http://localhost:7860**
+
+---
+
+### Option 3: Development install (for contributors)
 
 ```bash
-# Clone the repo
+# Clone the repository
 git clone https://github.com/nagarh/AmberFlow.git
 cd AmberFlow
 
-# Create conda environment with system dependencies
-conda create -n amberflow python=3.11
+# Create conda environment
+conda create -n amberflow python=3.11 -y
 conda activate amberflow
-conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi
 
-# Install in editable mode
+# Install conda dependencies
+conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi -y
+
+# Install AmberFlow in editable mode with dev dependencies
 pip install -e ".[dev]"
 
 # Run the app
 amberflow
-# or: python -m amberflow
-# or: python start_web_server.py
+# Alternative commands:
+#   python -m amberflow
+#   python start_web_server.py
 ```
+
+---
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| `ModuleNotFoundError: No module named 'gemmi'` | Run: `conda install -c conda-forge gemmi` |
+| `vina: command not found` | Run: `conda install -c conda-forge vina` |
+| Port 7860 already in use | Kill the process or edit `start_web_server.py` to use a different port |
+| Conda solver is slow | Use Miniforge or run: `conda install -c conda-forge mamba` then use `mamba install` instead |
 
 ---
 

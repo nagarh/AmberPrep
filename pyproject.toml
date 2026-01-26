@@ -45,11 +45,11 @@ requires-python = ">=3.10"
 # These conda packages also provide: numpy, pandas, matplotlib (don't override them)
 dependencies = [
     "flask==2.3.3",
-    "flask-cors=4.0.0",
+    "flask-cors==4.0.0",
     "biopython",
     "seaborn",
     "mdanalysis",
-    "gunicorn=21.2.0",
+    "gunicorn==21.2.0",
     "requests",
     "meeko>=0.7.0",
 ]
