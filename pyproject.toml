@@ -68,9 +68,9 @@ dev = [
 
 [project.urls]
 Homepage = "https://huggingface.co/spaces/hemantn/AmberFlow"
-Documentation = "https://github.com/hemantn/AmberFlow"
-Repository = "https://github.com/hemantn/AmberFlow"
-Issues = "https://github.com/hemantn/AmberFlow/issues"
+Documentation = "https://github.com/nagarh/AmberFlow"
+Repository = "https://github.com/nagarh/AmberFlow"
+Issues = "https://github.com/nagarh/AmberFlow/issues"
 
 [project.scripts]
 amberflow = "amberflow.__main__:main"

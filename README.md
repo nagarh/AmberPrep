@@ -64,7 +64,7 @@ docker run -p 7860:7860 hemantn/amberflow
 Or build from source:
 
 ```bash
-git clone https://github.com/hemantn/AmberFlow.git
+git clone https://github.com/nagarh/AmberFlow.git
 cd AmberFlow
 docker build -t amberflow .
 docker run -p 7860:7860 amberflow
@@ -74,7 +74,7 @@ docker run -p 7860:7860 amberflow
 
 ```bash
 # Clone the repo
-git clone https://github.com/hemantn/AmberFlow.git
+git clone https://github.com/nagarh/AmberFlow.git
 cd AmberFlow
 
 # Create conda environment with system dependencies
