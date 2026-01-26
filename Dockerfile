@@ -31,10 +31,10 @@ RUN conda config --add channels bioconda && \
 # Install mamba for faster package installation
 RUN conda install -n base -c conda-forge mamba -y
 
-# Install AMBER tools, PyMOL, AutoDock Vina, Open Babel, RDKit, and gemmi (for Meeko)
+# Install AMBER tools, PyMOL, AutoDock Vina 1.1.2, Open Babel, RDKit, and gemmi (for Meeko)
 RUN mamba install -y python=3.11 \
     conda-forge::ambertools conda-forge::pymol-open-source \
-    conda-forge::vina conda-forge::openbabel conda-forge::rdkit conda-forge::gemmi
+    bioconda::autodock-vina conda-forge::openbabel conda-forge::rdkit conda-forge::gemmi
 
 # Clean up conda/mamba cache to reduce image size
 RUN conda clean -afy
@@ -49,7 +49,9 @@ RUN pip install --no-cache-dir \
     mdanalysis \
     gunicorn==21.2.0 \
     requests \
-    meeko>=0.7.0
+    meeko>=0.7.0 \
+    prody \
+    "numpy<2.0"
 
 # Set working directory
 WORKDIR /AmberPrep

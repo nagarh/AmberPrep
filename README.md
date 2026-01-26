@@ -55,7 +55,7 @@ AmberPrep requires scientific packages that are only available via **conda** (no
 |---------|---------|
 | `ambertools` | AMBER MD tools (tleap, antechamber, sander) |
 | `pymol-open-source` | Structure visualization and editing |
-| `vina` | AutoDock Vina molecular docking |
+| `autodock-vina` | AutoDock Vina 1.1.2 molecular docking (from bioconda) |
 | `openbabel` | Molecule format conversion |
 | `rdkit` | Cheminformatics toolkit |
 | `gemmi` | Structure file parsing (required by Meeko) |
@@ -70,7 +70,7 @@ conda create -n amberprep python=3.11 -y
 conda activate amberprep
 
 # Step 2: Install conda-only dependencies
-conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi -y
+conda install -c conda-forge -c bioconda ambertools pymol-open-source autodock-vina openbabel rdkit gemmi -y
 
 # Step 3: Install AmberPrep from PyPI
 pip install amberprep

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amberprep"
-version = "0.1.0"
+version = "0.1.1"
 description = "Web-based MD simulation pipeline with AMBER, ESMFold, docking, and PLUMED"
 readme = "README.md"
 license = {text = "MIT"}
@@ -52,6 +52,8 @@ dependencies = [
     "gunicorn==21.2.0",
     "requests",
     "meeko>=0.7.0",
+    "prody",
+    "numpy<2.0",
 ]
 
 [project.optional-dependencies]
@@ -77,7 +79,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["amberflow*"]
+include = ["amberprep*"]
 
 [tool.setuptools.package-data]
 amberprep = [
