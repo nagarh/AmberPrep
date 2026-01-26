@@ -49,7 +49,7 @@ dependencies = [
     "biopython",
     "seaborn",
     "mdanalysis",
-    "gunicorn",
+    "gunicorn=21.2.0",
     "requests",
     "meeko>=0.7.0",
 ]
