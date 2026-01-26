@@ -64,10 +64,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://huggingface.co/spaces/hemantn/AmberFlow"
-Documentation = "https://github.com/nagarh/AmberFlow"
-Repository = "https://github.com/nagarh/AmberFlow"
-Issues = "https://github.com/nagarh/AmberFlow/issues"
+Homepage = "https://huggingface.co/spaces/hemantn/AmberPrep"
+Documentation = "https://github.com/nagarh/AmberPrep"
+Repository = "https://github.com/nagarh/AmberPrep"
+Issues = "https://github.com/nagarh/AmberPrep/issues"
 
 [project.scripts]
 amberprep = "amberprep.__main__:main"
