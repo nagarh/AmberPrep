@@ -1,7 +1,7 @@
 # Include package data
-recursive-include amberflow/html *
-recursive-include amberflow/css *
-recursive-include amberflow/js *
+recursive-include amberprep/html *
+recursive-include amberprep/css *
+recursive-include amberprep/js *
 
 # Include documentation
 include README.md

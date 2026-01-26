@@ -1,17 +1,10 @@
 <p align="center">
-  <img src="AmberFlow_logo.png" alt="AmberFlow Logo" width="400">
+  <img src="AmberPrep_logo.png" alt="AmberPrep Logo" width="400">
 </p>
 
-<p align="center">
-  <a href="https://pypi.org/project/amberflow/"><img src="https://img.shields.io/pypi/v/amberflow?color=blue&label=PyPI" alt="PyPI version"></a>
-  <a href="https://pypi.org/project/amberflow/"><img src="https://img.shields.io/pypi/pyversions/amberflow" alt="Python versions"></a>
-  <a href="https://github.com/nagarh/AmberFlow/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
-  <a href="https://huggingface.co/spaces/hemantn/AmberFlow"><img src="https://img.shields.io/badge/🤗%20Hugging%20Face-Spaces-orange" alt="Hugging Face Spaces"></a>
-</p>
+# AmberPrep
 
-# AmberFlow
-
-**AmberFlow** is a web-based pipeline for preparing structures, setting up molecular dynamics (MD) simulations with the AMBER force field. It integrates structure completion (ESMFold), preparation, force field parameterization, simulation file generation, and PLUMED-based biased MD in a single interface.
+**AmberPrep** is a web-based pipeline for preparing structures, setting up molecular dynamics (MD) simulations with the AMBER force field. It integrates structure completion (ESMFold), preparation, force field parameterization, simulation file generation, and PLUMED-based biased MD in a single interface.
 
 ---
 
@@ -38,7 +31,7 @@ For **custom PDB files** (uploaded or fetched), ensure:
 |-------------|-------------|
 | **Chain IDs** | Chain IDs must be clearly marked in the PDB (column 22). The pipeline uses them for chain selection, missing-residue filling, and structure preparation. |
 | **Ligands as HETATM** | All non-protein, non-water, non-ion molecules (e.g., cofactors, drugs) must be in **HETATM** records. The pipeline detects and lists only HETATM entities as ligands. |
-| **Standard amino acids** | AmberFlow supports **standard amino acids** only. Non-standard residues (e.g., MSE, HYP, SEC, non-canonical modifications) are not explicitly parameterized; pre-process or replace them before use if needed. |
+| **Standard amino acids** | AmberPrep supports **standard amino acids** only. Non-standard residues (e.g., MSE, HYP, SEC, non-canonical modifications) are not explicitly parameterized; pre-process or replace them before use if needed. |
 
 For RCSB structures, the pipeline parses the header and HETATM as provided; for your own PDBs, apply the above conventions.
 
@@ -46,9 +39,9 @@ For RCSB structures, the pipeline parses the header and HETATM as provided; for 
 
 ## Quick Start
 
-Try AmberFlow instantly on Hugging Face Spaces (no installation required):
+Try AmberPrep instantly on Hugging Face Spaces (no installation required):
 
-**[https://huggingface.co/spaces/hemantn/AmberFlow](https://huggingface.co/spaces/hemantn/AmberFlow)**
+**[https://huggingface.co/spaces/hemantn/AmberPrep](https://huggingface.co/spaces/hemantn/AmberPrep)**
 
 ---
 
@@ -56,7 +49,7 @@ Try AmberFlow instantly on Hugging Face Spaces (no installation required):
 
 ### Prerequisites
 
-AmberFlow requires scientific packages that are only available via **conda** (not PyPI). You must install these first:
+AmberPrep requires scientific packages that are only available via **conda** (not PyPI). You must install these first:
 
 | Package | Purpose |
 |---------|---------|
@@ -73,17 +66,17 @@ AmberFlow requires scientific packages that are only available via **conda** (no
 
 ```bash
 # Step 1: Create conda environment with required tools
-conda create -n amberflow python=3.11 -y
-conda activate amberflow
+conda create -n amberprep python=3.11 -y
+conda activate amberprep
 
 # Step 2: Install conda-only dependencies
 conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi -y
 
-# Step 3: Install AmberFlow from PyPI
-pip install amberflow
+# Step 3: Install AmberPrep from PyPI
+pip install amberprep
 
 # Step 4: Run the web app
-amberflow
+amberprep
 ```
 
 Open your browser at **http://localhost:7860**
@@ -93,10 +86,10 @@ Open your browser at **http://localhost:7860**
 ### Option 2: Docker (no conda/pip needed)
 **build from source:**
 ```bash
-git clone https://github.com/nagarh/AmberFlow.git
-cd AmberFlow
-docker build -t amberflow .
-docker run -p 7860:7860 amberflow
+git clone https://github.com/nagarh/AmberPrep.git
+cd AmberPrep
+docker build -t amberprep .
+docker run -p 7860:7860 amberprep
 ```
 
 Open your browser at **http://localhost:7860**
@@ -253,7 +246,7 @@ Generated files are written under `output/` (or the path set in the app), for ex
 ## Project Structure
 
 ```
-AmberFlow/
+AmberPrep/
 ├── start_web_server.py      # Entry point
 ├── html/
 │   ├── index.html           # Main UI
@@ -281,14 +274,14 @@ AmberFlow/
 
 ## Citation
 
-If you use AmberFlow in your work, please cite:
+If you use AmberPrep in your work, please cite:
 
 ```bibtex
-@software{AmberFlow,
-  title = {AmberFlow: Molecular Dynamics and Docking Pipeline},
+@software{AmberPrep,
+  title = {AmberPrep: Molecular Dynamics and Docking Pipeline},
   author = {Nagar, Hemant},
   year = {2025},
-  url = {https://github.com/your-org/AmberFlow}
+  url = {https://github.com/your-org/AmberPrep}
 }
 ```
 

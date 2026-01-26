@@ -1,6 +1,6 @@
-"""Run the AmberFlow web server. Use: python -m amberflow or amberflow"""
+"""Run the AmberPrep web server. Use: python -m amberprep or amberprep"""
 
-from amberflow.app import app
+from amberprep.app import app
 
 
 def main():

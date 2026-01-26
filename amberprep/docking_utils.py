@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docking Utilities for AmberFlow
+Docking Utilities for AmberPrep
 
 This module contains all the Python functions needed for the docking workflow:
 1. Compute ligand center

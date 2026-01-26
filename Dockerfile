@@ -52,17 +52,17 @@ RUN pip install --no-cache-dir \
     meeko>=0.7.0
 
 # Set working directory
-WORKDIR /AmberFlow
+WORKDIR /AmberPrep
 
 # Copy the entire project
 COPY . .
 
 # Create necessary directories with proper permissions
-RUN mkdir -p /AmberFlow/obsolete /AmberFlow/pdb /AmberFlow/temp /AmberFlow/output && \
-    chmod -R 777 /AmberFlow
+RUN mkdir -p /AmberPrep/obsolete /AmberPrep/pdb /AmberPrep/temp /AmberPrep/output && \
+    chmod -R 777 /AmberPrep
 
-# Make sure the amberflow package is on the Python path
-ENV PYTHONPATH="${PYTHONPATH}:/AmberFlow"
+# Make sure the amberprep package is on the Python path
+ENV PYTHONPATH="${PYTHONPATH}:/AmberPrep"
 
 # Expose the port
 EXPOSE 7860

@@ -1,7 +1,7 @@
 """
-AmberFlow: Web-based MD simulation pipeline with AMBER, ESMFold, docking, and PLUMED.
+AmberPrep: Web-based MD simulation pipeline with AMBER, ESMFold, docking, and PLUMED.
 
-AmberFlow provides a complete workflow for:
+AmberPrep provides a complete workflow for:
 - Protein structure loading and visualization
 - Missing residue completion with ESMFold
 - Structure preparation (cleaning, capping, chain/ligand selection)
@@ -12,13 +12,13 @@ AmberFlow provides a complete workflow for:
 
 Usage:
     # Run the web interface
-    $ amberflow
+    $ amberprep
     # or
-    $ python -m amberflow
+    $ python -m amberprep
 
     # Import in Python
-    from amberflow.app import app
-    from amberflow.structure_preparation import prepare_structure
+    from amberprep.app import app
+    from amberprep.structure_preparation import prepare_structure
 
 Requirements:
     - Python >= 3.10
@@ -33,6 +33,6 @@ __author__ = "Hemant Nagar"
 __email__ = "hn533621@ohio.edu"
 
 # Expose key components for programmatic use
-from amberflow.app import app
+from amberprep.app import app
 
 __all__ = ["app", "__version__"]

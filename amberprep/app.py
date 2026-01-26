@@ -4657,7 +4657,7 @@ def build_completed_structure_endpoint():
 import sys
 import os
 
-# Add amberflow package to path (Fill_missing_residues is in amberflow/)
+# Add amberprep package to path (Fill_missing_residues is in amberprep/)
 sys.path.insert(0, r'{str(Path(__file__).parent)}')
 
 # Change to output directory
