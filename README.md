@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="AmberFlow_logo.png" alt="AmberFlow Logo" width="400">
+</p>
+
 # AmberFlow
 
 **AmberFlow** is a web-based pipeline for preparing structures, setting up molecular dynamics (MD) simulations with the AMBER force field. It integrates structure completion (ESMFold), preparation, force field parameterization, simulation file generation, and PLUMED-based biased MD in a single interface.
@@ -80,13 +84,7 @@ Open your browser at **http://localhost:7860**
 ---
 
 ### Option 2: Docker (no conda/pip needed)
-
-**Using pre-built image:**
-```bash
-docker run -p 7860:7860 hemantn/amberflow
-```
-
-**Or build from source:**
+**build from source:**
 ```bash
 git clone https://github.com/nagarh/AmberFlow.git
 cd AmberFlow
@@ -98,32 +96,6 @@ Open your browser at **http://localhost:7860**
 
 ---
 
-### Option 3: Development install (for contributors)
-
-```bash
-# Clone the repository
-git clone https://github.com/nagarh/AmberFlow.git
-cd AmberFlow
-
-# Create conda environment
-conda create -n amberflow python=3.11 -y
-conda activate amberflow
-
-# Install conda dependencies
-conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi -y
-
-# Install AmberFlow in editable mode with dev dependencies
-pip install -e ".[dev]"
-
-# Run the app
-amberflow
-# Alternative commands:
-#   python -m amberflow
-#   python start_web_server.py
-```
-
----
-
 ### Troubleshooting
 
 | Issue | Solution |
@@ -131,7 +103,7 @@ amberflow
 | `ModuleNotFoundError: No module named 'gemmi'` | Run: `conda install -c conda-forge gemmi` |
 | `vina: command not found` | Run: `conda install -c conda-forge vina` |
 | Port 7860 already in use | Kill the process or edit `start_web_server.py` to use a different port |
-| Conda solver is slow | Use Miniforge or run: `conda install -c conda-forge mamba` then use `mamba install` instead |
+
 
 ---
 
