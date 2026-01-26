@@ -28,7 +28,7 @@ Requirements:
 License: MIT
 """
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __author__ = "Hemant Nagar"
 __email__ = "hn533621@ohio.edu"
 

@@ -2835,6 +2835,13 @@ echo "Analysis completed! Results saved in analysis/ directory"
             return;
         }
 
+        // Get selected chains first and validate
+        const selectedChains = this.getSelectedChains();
+        if (!selectedChains || selectedChains.length === 0) {
+            alert('Please select at least one chain for structure preparation.');
+            return;
+        }
+
         // Get preparation options
         const options = {
             remove_water: document.getElementById('remove-water').checked,
@@ -2844,7 +2851,7 @@ echo "Analysis completed! Results saved in analysis/ directory"
             add_ace: document.getElementById('add-ace').checked,
             preserve_ligands: document.getElementById('preserve-ligands').checked,
             separate_ligands: document.getElementById('separate-ligands').checked,
-            selected_chains: this.getSelectedChains(),
+            selected_chains: selectedChains,
             selected_ligands: this.getSelectedLigands()
         };
 

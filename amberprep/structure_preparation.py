@@ -735,8 +735,8 @@ def prepare_structure(pdb_content, options, output_dir="output"):
             if not extract_selected_chains(pdb_content, user_chain_file, selected_chains):
                 raise Exception("Failed to extract selected chains")
         else:
-            print("Step 0.5a: No chains selected, using original structure")
-            shutil.copy2(input_file, user_chain_file)
+            # No chains selected - raise an error instead of using all chains
+            raise Exception("No chains selected. Please select at least one chain for structure preparation.")
         
         if selected_ligands:
             ligand_names = []
