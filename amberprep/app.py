@@ -2100,6 +2100,11 @@ def prepare_structure_endpoint():
         # Prepare structure (use OUTPUT_DIR so paths match app's output folder)
         result = prepare_structure(pdb_content, options, output_dir=str(OUTPUT_DIR))
         
+        # Check if prepare_structure returned an error
+        if result.get('error'):
+            logger.error(f"Structure preparation failed: {result['error']}")
+            return jsonify({'error': result['error']}), 400
+        
         # Validate and sanitize ligand names early (after structure preparation)
         # This ensures numeric ligand names are converted to 3-letter codes
         ligand_name_changes = validate_and_sanitize_all_ligand_files()
