@@ -879,6 +879,16 @@ def prepare_structure(pdb_content, options, output_dir="output"):
                             if lig_lines:  # Only add non-empty ligand groups
                                 all_ligand_groups.append(lig_lines)
                     
+                    # Create combined ligand file (4_ligands_corrected.pdb) for separate download
+                    with open(ligand_corrected_file, 'w') as f:
+                        for i, lig_group in enumerate(all_ligand_groups):
+                            for line in lig_group:
+                                f.write(line if line.endswith('\n') else line + '\n')
+                            if i < len(all_ligand_groups) - 1:
+                                f.write('TER\n')
+                        f.write('END\n')
+                    print(f"Created combined ligand file: {ligand_corrected_file}")
+                    
                     # Merge protein and all ligands (with TER records between ligands)
                     if not merge_protein_and_ligand(protein_capped_file, None, tleap_ready_file, ligand_groups=all_ligand_groups):
                         raise Exception("Failed to merge protein and ligands")
