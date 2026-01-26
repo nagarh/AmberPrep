@@ -17,43 +17,38 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install conda
-RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
-    bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda && \
-    rm Miniconda3-latest-Linux-x86_64.sh
+# Install Miniforge (conda-forge–based; no Anaconda ToS) and configure channels
+RUN wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh && \
+    bash Miniforge3-Linux-x86_64.sh -b -p /opt/conda && \
+    rm Miniforge3-Linux-x86_64.sh
 
 ENV PATH="/opt/conda/bin:${PATH}"
 
-# Accept conda Terms of Service and configure channels
-RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
-    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
-    conda config --add channels conda-forge && \
-    conda config --add channels bioconda && \
+# Add bioconda; conda-forge is default for Miniforge. No Anaconda ToS needed.
+RUN conda config --add channels bioconda && \
     conda config --set channel_priority flexible
 
 # Install mamba for faster package installation
 RUN conda install -n base -c conda-forge mamba -y
 
-# Install AMBER tools, PyMOL, AutoDock Vina, and Open Babel (for docking)
-RUN mamba install -y python=3.11 conda-forge::ambertools conda-forge::pymol-open-source \
-    conda-forge::autodock-vina conda-forge::openbabel
+# Install AMBER tools, PyMOL, AutoDock Vina, Open Babel, RDKit, and gemmi (for Meeko)
+RUN mamba install -y python=3.11 \
+    conda-forge::ambertools conda-forge::pymol-open-source \
+    conda-forge::vina conda-forge::openbabel conda-forge::rdkit conda-forge::gemmi
 
 # Clean up conda/mamba cache to reduce image size
 RUN conda clean -afy
 
-# Install Python packages via pip (AmberFlow deps: Dockerfile minus scipy, plus meeko for docking)
+# Install Python packages via pip (only packages not provided by conda or that need pip)
+# Note: numpy, pandas, matplotlib are already installed by conda; don't override to avoid conflicts
 RUN pip install --no-cache-dir \
     flask==2.3.3 \
     flask-cors==4.0.0 \
-    biopython==1.81 \
-    numpy==1.24.3 \
-    pandas==2.0.3 \
-    matplotlib==3.7.2 \
-    seaborn==0.12.2 \
-    mdanalysis==2.5.0 \
+    biopython \
+    seaborn \
+    mdanalysis \
     gunicorn==21.2.0 \
-    requests==2.31.0 \
-    rdkit==2023.3.1 \
+    requests \
     meeko>=0.7.0
 
 # Set working directory
@@ -74,4 +69,3 @@ EXPOSE 7860
 
 # Run the application
 CMD ["python", "start_web_server.py"]
-

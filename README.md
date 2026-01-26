@@ -35,57 +35,61 @@ For RCSB structures, the pipeline parses the header and HETATM as provided; for 
 
 ## Installation
 
-### Option 1: Docker (recommended)
+### Option 1: pip install (recommended)
+
+AmberFlow requires some conda packages (AMBER tools, PyMOL, Vina) that are not available on PyPI. Install them first, then install AmberFlow via pip:
 
 ```bash
-git clone https://github.com/your-org/AmberFlow.git
+# Step 1: Create conda environment with required tools
+conda create -n amberflow python=3.11
+conda activate amberflow
+conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi
+
+# Step 2: Install AmberFlow from PyPI
+pip install amberflow
+
+# Step 3: Run the web app
+amberflow
+```
+
+The app will be available at `http://localhost:7860`.
+
+### Option 2: Docker
+
+```bash
+docker pull hemantn/amberflow  # or build locally
+docker run -p 7860:7860 hemantn/amberflow
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/hemantn/AmberFlow.git
 cd AmberFlow
 docker build -t amberflow .
 docker run -p 7860:7860 amberflow
 ```
 
-Open `http://localhost:7860` in your browser.
-
-### Option 2: Local (Conda + pip)
-
-1. **Conda environment** with AMBER tools, PyMOL, and Python 3.10–3.11:
-
-   ```bash
-   conda create -n amberflow python=3.11
-   conda activate amberflow
-   conda install -c conda-forge ambertools pymol-open-source
-   ```
-
-2. **Conda packages for docking** (Vina, Open Babel; Meeko is via pip):
-
-   ```bash
-   conda install -c conda-forge autodock-vina openbabel
-   ```
-
-3. **Python packages**:
-
-   ```bash
-   pip install -r requirements.txt
-   # or: pip install flask flask-cors biopython numpy pandas matplotlib seaborn mdanalysis gunicorn requests rdkit meeko vina
-   ```
-
-3. **Run the app**:
-
-   ```bash
-   python start_web_server.py
-   ```
-
-   The app listens on `http://0.0.0.0:7860` by default.
-
-### Option 3: Install from PyPI (when published)
+### Option 3: Development install
 
 ```bash
-pip install amberflow
-# Requires: AMBER tools, PyMOL, AutoDock Vina, Open Babel (e.g. conda install -c conda-forge ambertools pymol-open-source autodock-vina openbabel)
-amberflow
-```
+# Clone the repo
+git clone https://github.com/hemantn/AmberFlow.git
+cd AmberFlow
 
-See **[PACKAGING.md](PACKAGING.md)** for dependency list, build, and PyPI release steps.
+# Create conda environment with system dependencies
+conda create -n amberflow python=3.11
+conda activate amberflow
+conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi
+
+# Install in editable mode
+pip install -e ".[dev]"
+
+# Run the app
+amberflow
+# or: python -m amberflow
+# or: python start_web_server.py
+```
 
 ---
 
