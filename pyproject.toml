@@ -40,20 +40,17 @@ classifiers = [
 requires-python = ">=3.10"
 
 # Core dependencies installable via pip
-# Note: ambertools, pymol, vina, openbabel require conda installation BEFORE pip install
+# Note: Users MUST install these via conda FIRST (not available on PyPI):
+#   conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi
+# These conda packages also provide: numpy, pandas, matplotlib (don't override them)
 dependencies = [
-    "flask>=2.3.0",
-    "flask-cors>=4.0.0",
-    "biopython>=1.81",
-    "numpy>=1.24.0",
-    "pandas>=2.0.0",
-    "matplotlib>=3.7.0",
-    "seaborn>=0.12.0",
-    "mdanalysis>=2.5.0",
-    "gunicorn>=21.0.0",
-    "requests>=2.31.0",
-    "rdkit",
-    "gemmi",
+    "flask",
+    "flask-cors",
+    "biopython",
+    "seaborn",
+    "mdanalysis",
+    "gunicorn",
+    "requests",
     "meeko>=0.7.0",
 ]
 
