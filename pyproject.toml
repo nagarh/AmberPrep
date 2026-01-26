@@ -44,8 +44,8 @@ requires-python = ">=3.10"
 #   conda install -c conda-forge ambertools pymol-open-source vina openbabel rdkit gemmi
 # These conda packages also provide: numpy, pandas, matplotlib (don't override them)
 dependencies = [
-    "flask",
-    "flask-cors",
+    "flask==2.3.3",
+    "flask-cors=4.0.0",
     "biopython",
     "seaborn",
     "mdanalysis",
