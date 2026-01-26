@@ -2,6 +2,13 @@
   <img src="AmberFlow_logo.png" alt="AmberFlow Logo" width="400">
 </p>
 
+<p align="center">
+  <a href="https://pypi.org/project/amberflow/"><img src="https://img.shields.io/pypi/v/amberflow?color=blue&label=PyPI" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/amberflow/"><img src="https://img.shields.io/pypi/pyversions/amberflow" alt="Python versions"></a>
+  <a href="https://github.com/nagarh/AmberFlow/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+  <a href="https://huggingface.co/spaces/hemantn/AmberFlow"><img src="https://img.shields.io/badge/🤗%20Hugging%20Face-Spaces-orange" alt="Hugging Face Spaces"></a>
+</p>
+
 # AmberFlow
 
 **AmberFlow** is a web-based pipeline for preparing structures, setting up molecular dynamics (MD) simulations with the AMBER force field. It integrates structure completion (ESMFold), preparation, force field parameterization, simulation file generation, and PLUMED-based biased MD in a single interface.
