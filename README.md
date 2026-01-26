@@ -281,8 +281,7 @@ If you use AmberPrep in your work, please cite:
   title = {AmberPrep: Molecular Dynamics and Docking Pipeline},
   author = {Nagar, Hemant},
   year = {2025},
-  url = {https://github.com/your-org/AmberPrep}
-}
+  url = {https://github.com/nagarh/AmberPrep}
 ```
 
 **Related software to cite when used:**
@@ -290,8 +289,11 @@ If you use AmberPrep in your work, please cite:
 - **AMBER**: [ambermd.org](https://ambermd.org)
 - **PLUMED**: [plumed.org/cite](https://www.plumed.org/cite)
 - **ESMFold / ESM Atlas**: [esmatlas.com/about](https://esmatlas.com/about)
-- **AutoDock Vina**: Trott & Olson, *J. Comput. Chem.* (2010)
+- **AutoDock Vina**: [autodock-vina/cite](https://autodock-vina.readthedocs.io/en/latest/citations.html)
 - **Meeko**: [github.com/forlilab/Meeko](https://github.com/forlilab/Meeko)
+- **MDAnalysis**: [mdanalysis/cite](https://www.mdanalysis.org/pages/citations/)
+- **NGL Viewer**: [nglviewer/cite](https://doi.org/10.1093/bioinformatics/bty419)
+- **PyMOL**: [pymol/cite](https://www.pymol.org/support.html) 
 
 ---
 
