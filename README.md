@@ -111,8 +111,8 @@ Open your browser at **http://localhost:7860**
 
 ### 1. Protein Loading
 
-- **Upload**: Drag-and-drop or choose a `.pdb` / `.ent` file.
-- **Fetch**: Enter a 4-character PDB ID (e.g. `1CRN`) to download from RCSB.
+- **Upload**: Drag-and-drop or choose a `.pdb` file.
+- **Fetch**: Enter a 4-character PDB ID (e.g. `1HPV`) to download from RCSB.
 
 After loading, the **Protein Preview** shows: structure ID, atom count, chains, residues, water, ions, ligands, and HETATM count. Use the 3D viewer to inspect the structure.
 
