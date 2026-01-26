@@ -1,124 +1,295 @@
----
-title: AmberFlow - MD Simulation Pipeline
-emoji: 🧬
-colorFrom: blue
-colorTo: purple
-sdk: docker
-pinned: false
-license: mit
-app_port: 7860
----
+# AmberFlow
 
-# AmberFlow - Molecular Dynamics Simulation Pipeline
+**AmberFlow** is a web-based pipeline for preparing structures, setting up molecular dynamics (MD) simulations with the AMBER force field. It integrates structure completion (ESMFold), preparation, force field parameterization, simulation file generation, and PLUMED-based biased MD in a single interface.
 
-🧬 **AmberFlow** is a comprehensive web-based pipeline for preparing and setting up molecular dynamics (MD) simulations using the AMBER force field. This tool provides an intuitive interface for protein structure preparation, parameter generation, and simulation file creation.
+---
 
 ## Features
 
-### 🔬 Structure Preparation
-- **Protein Loading**: Upload PDB files or fetch from RCSB PDB database
-- **Structure Cleaning**: Remove water molecules, ions, and hydrogen atoms
-- **Capping Groups**: Add ACE (N-terminal) and NME (C-terminal) capping groups
-- **Ligand Handling**: Preserve and process ligands with automatic force field parameter generation
-- **3D Visualization**: Interactive molecular viewer using NGL
+| Section | Description |
+|--------|-------------|
+| **Protein Loading** | Upload PDB files or fetch from RCSB PDB; 3D visualization with NGL |
+| **Fill Missing Residues** | Detect missing residues (RCSB annotations), complete with ESMFold, optional trimming and energy minimization of predicted structure|
+| **Structure Preparation** | Remove water/ions/H; add ACE/NME capping; chain and ligand selection; GAFF/GAFF2 parameterization |
+| **Ligand Docking** | AutoDock Vina + Meeko; configurable search box; pose selection and use selected ligand pose to setup MD simulations |
+| **Simulation Parameters** | Force fields (ff14SB, ff19SB), water models (TIP3P, SPCE), box size, temperature, pressure |
+| **Simulation Steps** | Restrained minimization, minimization, NVT, NPT, production — each with configurable parameters |
+| **Generate Files** | AMBER `.in` files, `prmtop`/`inpcrd`, PBS submission scripts |
+| **PLUMED** | Collective variables (PLUMED v2.9), `plumed.dat` editor, and simulation file generation with PLUMED |
 
-### ⚙️ Simulation Parameters
-- **Force Fields**: Support for ff14SB and ff19SB protein force fields
-- **Water Models**: TIP3P and SPCE water models
-- **System Setup**: Configurable box size and ion addition
-- **Thermodynamics**: Temperature and pressure control
+---
 
-### 📋 Simulation Steps
-- **Restrained Minimization**: Position-restrained energy minimization
-- **Minimization**: Full system energy minimization
-- **NPT Heating**: Temperature equilibration
-- **NPT Equilibration**: Pressure and temperature equilibration
-- **Production Run**: Configurable production MD simulation
+## Requirements for Custom PDB Files
 
-### 📁 File Generation
-- **AMBER Input Files**: Complete set of .in files for all simulation steps
-- **Force Field Parameters**: Generated .prmtop and .inpcrd files
-- **PBS Scripts**: HPC submission scripts
-- **Analysis Scripts**: Post-simulation analysis tools
+For **custom PDB files** (uploaded or fetched), ensure:
+
+| Requirement | Description |
+|-------------|-------------|
+| **Chain IDs** | Chain IDs must be clearly marked in the PDB (column 22). The pipeline uses them for chain selection, missing-residue filling, and structure preparation. |
+| **Ligands as HETATM** | All non-protein, non-water, non-ion molecules (e.g., cofactors, drugs) must be in **HETATM** records. The pipeline detects and lists only HETATM entities as ligands. |
+| **Standard amino acids** | AmberFlow supports **standard amino acids** only. Non-standard residues (e.g., MSE, HYP, SEC, non-canonical modifications) are not explicitly parameterized; pre-process or replace them before use if needed. |
+
+For RCSB structures, the pipeline parses the header and HETATM as provided; for your own PDBs, apply the above conventions.
+
+---
+
+## Installation
+
+### Option 1: Docker (recommended)
+
+```bash
+git clone https://github.com/your-org/AmberFlow.git
+cd AmberFlow
+docker build -t amberflow .
+docker run -p 7860:7860 amberflow
+```
+
+Open `http://localhost:7860` in your browser.
+
+### Option 2: Local (Conda + pip)
+
+1. **Conda environment** with AMBER tools, PyMOL, and Python 3.10–3.11:
+
+   ```bash
+   conda create -n amberflow python=3.11
+   conda activate amberflow
+   conda install -c conda-forge ambertools pymol-open-source
+   ```
+
+2. **Conda packages for docking** (Vina, Open Babel; Meeko is via pip):
+
+   ```bash
+   conda install -c conda-forge autodock-vina openbabel
+   ```
+
+3. **Python packages**:
+
+   ```bash
+   pip install -r requirements.txt
+   # or: pip install flask flask-cors biopython numpy pandas matplotlib seaborn mdanalysis gunicorn requests rdkit meeko vina
+   ```
+
+3. **Run the app**:
+
+   ```bash
+   python start_web_server.py
+   ```
+
+   The app listens on `http://0.0.0.0:7860` by default.
+
+### Option 3: Install from PyPI (when published)
+
+```bash
+pip install amberflow
+# Requires: AMBER tools, PyMOL, AutoDock Vina, Open Babel (e.g. conda install -c conda-forge ambertools pymol-open-source autodock-vina openbabel)
+amberflow
+```
+
+See **[PACKAGING.md](PACKAGING.md)** for dependency list, build, and PyPI release steps.
+
+---
 
 ## Usage
 
-1. **Load Protein Structure**
-   - Upload a PDB file or enter a PDB ID to fetch from RCSB
-   - View 3D structure and basic information
+### 1. Protein Loading
 
-2. **Prepare Structure**
-   - Configure structure preparation options
-   - Remove unwanted components (water, ions, hydrogens)
-   - Add capping groups for termini
-   - Handle ligands if present
+- **Upload**: Drag-and-drop or choose a `.pdb` / `.ent` file.
+- **Fetch**: Enter a 4-character PDB ID (e.g. `1CRN`) to download from RCSB.
 
-3. **Set Simulation Parameters**
-   - Choose force field and water model
-   - Configure system parameters
-   - Set temperature and pressure
+After loading, the **Protein Preview** shows: structure ID, atom count, chains, residues, water, ions, ligands, and HETATM count. Use the 3D viewer to inspect the structure.
 
-4. **Configure Simulation Steps**
-   - Enable/disable simulation steps
-   - Set step-specific parameters
-   - Configure production run duration
+---
 
-5. **Generate Files**
-   - Generate all simulation input files
-   - Download files as ZIP archive
-   - Preview generated files
+### 2. Fill Missing Residues
 
-## Technical Details
+- Click **Analyze Missing Residues** to detect gaps from RCSB metadata.
+- **Select chains** to complete with ESMFold.
+- **Trim residues** (optional): remove residues from N- or C-terminal edges; internal loops are always filled by ESMFold.
+- **Energy minimization** (optional): if you enable ESMFold completion, you can minimize selected chains to resolve clashes before docking. Recommended if receptor preparation (Meeko) fails later.
+- **Build Completed Structure** to run ESMFold and (if requested) minimization. Use **Preview Completed Structure** and **View Superimposed Structures** to compare original and completed chains.
 
-### Dependencies
-- **MDAnalysis**: Structure manipulation and analysis
-- **BioPython**: PDB file parsing
-- **Flask**: Web framework
-- **NGL Viewer**: 3D molecular visualization
-- **AMBER Tools**: Force field parameter generation
+> If you use ESMFold in this workflow, please cite [ESM Atlas](https://esmatlas.com/about).
 
-### File Structure
+---
+
+### 3. Structure Preparation
+
+- **Remove**: Water, ions, and hydrogens (options are pre-configured).
+- **Add capping**: ACE (N-terminal) and NME (C-terminal).
+- **Chains**: Select which protein chains to keep for force field generation.
+- **Ligands**:
+  - **Preserve ligands** to keep them in the structure.
+  - **Select ligands to preserve** (e.g. `GOL-A-1`, `LIZ-A`). Unselected ligands are dropped.
+  - **Create separate ligand file** to export selected ligand(s) to a PDB.
+
+Click **Prepare Structure**. The status panel reports original vs prepared atom counts, removed components, added capping, and preserved ligands. Use **View Prepared Structure** and **Download Prepared PDB** as needed.
+
+**Ligand Docking** (nested in this tab):
+
+- Select ligands to dock.
+- Set the **search space** (center and size in X, Y, Z) with live 3D visualization.
+- **Run Docking** (AutoDock Vina + Meeko). Progress and logs are shown in the docking panel.
+- **Select poses** per ligand and **Use selected pose** to write the chosen pose into the structure for AMBER. You can switch modes (e.g. 1–9) and jump by clicking the mode labels.
+
+---
+
+### 4. Simulation Parameters
+
+- **Force field**: ff14SB or ff19SB.
+- **Water model**: TIP3P or SPCE.
+- **Box size** (Å): padding for solvation.
+- **Add ions**: to neutralize (and optionally reach a salt concentration).
+- **Temperature** and **Pressure** (e.g. 300 K, 1 bar).
+- **Time step** and **Cutoff** for non-bonded interactions.
+
+If ligands were preserved, **Ligand force field** (GAFF/GAFF2) is configured here; net charge is computed before `antechamber` runs.
+
+---
+
+### 5. Simulation Steps
+
+Enable/disable and set parameters for:
+
+- **Restrained minimization** (steps, force constant)
+- **Minimization** (steps, cutoff)
+- **NVT heating** (steps, temperature)
+- **NPT equilibration** (steps, temperature, pressure)
+- **Production** (steps, temperature, pressure)
+
+---
+
+### 6. Generate Files
+
+- **Generate All Files** to create AMBER inputs (`min_restrained.in`, `min.in`, `HeatNPT.in`, `mdin_equi.in`, `mdin_prod.in`), `tleap` scripts, `submit_job.pbs`, and (after `tleap`) `prmtop`/`inpcrd`.
+- **Preview Files** to open and **edit** each file (e.g. `min.in`, `submit_job.pbs`) and **Save**; changes are written to the output directory.
+- **Preview Solvated Protein** / **Download Solvated Protein** to inspect and download the solvated system.
+
+For **PLUMED-based runs**, go to the **PLUMED** tab to configure CVs and `plumed.dat`, then use **Generate simulation files** there to produce inputs that include PLUMED.
+
+---
+
+### 7. PLUMED
+
+- **Collective Variables**: search and select CVs from the PLUMED v2.9 set; view docs and add/edit lines in `plumed.dat`.
+- **Custom PLUMED**: edit `plumed.dat` directly.
+- **Generate simulation files**: create AMBER + PLUMED input files. Generated files can be **previewed, edited, and saved** as in the main **Generate Files** tab.
+
+> PLUMED citation: [plumed.org/cite](https://www.plumed.org/cite).
+
+---
+
+## Pipeline Overview
+
+```
+Protein Loading (upload/fetch)
+        ↓
+Fill Missing Residues (detect → ESMFold → optional trim & minimize)
+        ↓
+Structure Preparation (clean, cap, chains, ligands) → optional Docking (Vina, apply pose)
+        ↓
+Simulation Parameters (FF, water, box, T, P, etc.)
+        ↓
+Simulation Steps (min, NVT, NPT, prod)
+        ↓
+Generate Files (AMBER .in, tleap, prmtop/inpcrd, PBS)
+        ↓
+[Optional] PLUMED (CVs, plumed.dat, generate PLUMED-enabled files)
+```
+
+---
+
+## Output Layout
+
+Generated files are written under `output/` (or the path set in the app), for example:
+
+- `0_original_input.pdb` — raw input
+- `1_protein_no_hydrogens.pdb` — cleaned, capped, chain/ligand selection applied
+- `2_protein_with_caps.pdb`, `tleap_ready.pdb` — intermediates
+- `4_ligands_corrected_*.pdb` — prepared ligands
+- `protein.prmtop`, `protein.inpcrd` — after `tleap`
+- `min_restrained.in`, `min.in`, `HeatNPT.in`, `mdin_equi.in`, `mdin_prod.in`, `submit_job.pbs`
+- `output/docking/` — receptor, ligands, Vina configs, poses, logs
+- `plumed.dat` — when using PLUMED
+
+---
+
+## Dependencies
+
+| Category | Tools / libraries |
+|----------|-------------------|
+| **Python** | Flask, Flask-CORS, BioPython, NumPy, Pandas, Matplotlib, Seaborn, MDAnalysis, Requests, RDKit, SciPy |
+| **AMBER** | AMBER Tools (tleap, antechamber, sander, ambpdb, etc.) |
+| **Docking** | Meeko (`mk_prepare_ligand`, `mk_prepare_receptor`), AutoDock Vina, Open Babel |
+| **Visualization** | PyMOL (scripted for H removal, structure editing), NGL (in-browser 3D) |
+| **Structure completion** | ESMFold (via API or local, depending on deployment) |
+
+---
+
+## Project Structure
+
 ```
 AmberFlow/
-├── app.py                 # Hugging Face Spaces entry point
-├── requirements.txt       # Python dependencies
-├── python/
-│   ├── app.py            # Main Flask application
-│   ├── structure_preparation.py
-│   └── requirements.txt
+├── start_web_server.py      # Entry point
 ├── html/
-│   └── index.html        # Web interface
+│   ├── index.html           # Main UI
+│   └── plumed.html          # PLUMED-focused view (if used)
 ├── css/
-│   └── styles.css        # Styling
+│   ├── styles.css
+│   └── plumed.css
 ├── js/
-│   └── script.js         # Frontend logic
-├── templates/            # AMBER input file templates
-└── add_caps.py          # Capping group addition script
+│   ├── script.js            # Main frontend logic
+│   ├── plumed.js            # PLUMED + docking UI
+│   └── plumed_cv_docs.js    # CV documentation
+├── python/
+│   ├── app.py               # Flask backend, API, file generation
+│   ├── structure_preparation.py
+│   ├── add_caps.py          # ACE/NME capping
+│   ├── Fill_missing_residues.py  # ESMFold, trimming, minimization
+│   ├── docking.py           # Docking helpers
+│   └── docking_utils.py
+├── output/                  # Generated files (gitignored in dev)
+├── Dockerfile
+└── README.md
 ```
+
+---
 
 ## Citation
 
-If you use AmberFlow in your research, please cite:
+If you use AmberFlow in your work, please cite:
 
 ```bibtex
-@software{Amberflow2025,
-  title={AmberFlow: Molecular Dynamics Simulation Pipeline},
-  author={Hemant Nagar},
-  year={2025},
-  url={https://huggingface.co/spaces/hemantn/AmberFlow}
+@software{AmberFlow,
+  title = {AmberFlow: Molecular Dynamics and Docking Pipeline},
+  author = {Nagar, Hemant},
+  year = {2025},
+  url = {https://github.com/your-org/AmberFlow}
 }
 ```
 
+**Related software to cite when used:**
+
+- **AMBER**: [ambermd.org](https://ambermd.org)
+- **PLUMED**: [plumed.org/cite](https://www.plumed.org/cite)
+- **ESMFold / ESM Atlas**: [esmatlas.com/about](https://esmatlas.com/about)
+- **AutoDock Vina**: Trott & Olson, *J. Comput. Chem.* (2010)
+- **Meeko**: [github.com/forlilab/Meeko](https://github.com/forlilab/Meeko)
+
+---
+
 ## Acknowledgments
 
-- **Mohd Ibrahim** (Technical University of Munich) for the protein capping functionality (`add_caps.py`)
+- **Mohd Ibrahim** (Technical University of Munich) for the protein capping logic (`add_caps.py`).
+
+---
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT License. See `LICENSE` for details.
+
+---
 
 ## Contact
 
-- **Author**: Hemant Nagar
+- **Author**: Hemant Nagar  
 - **Email**: hn533621@ohio.edu
-

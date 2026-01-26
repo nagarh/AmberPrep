@@ -34,13 +34,14 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
 # Install mamba for faster package installation
 RUN conda install -n base -c conda-forge mamba -y
 
-# Install AMBER tools and PyMOL using mamba with Python 3.11 (compatible version)
-RUN mamba install -y python=3.11 conda-forge::ambertools conda-forge::pymol-open-source
+# Install AMBER tools, PyMOL, AutoDock Vina, and Open Babel (for docking)
+RUN mamba install -y python=3.11 conda-forge::ambertools conda-forge::pymol-open-source \
+    conda-forge::autodock-vina conda-forge::openbabel
 
 # Clean up conda/mamba cache to reduce image size
 RUN conda clean -afy
 
-# Install Python packages via pip
+# Install Python packages via pip (AmberFlow deps: Dockerfile minus scipy, plus meeko for docking)
 RUN pip install --no-cache-dir \
     flask==2.3.3 \
     flask-cors==4.0.0 \
@@ -53,7 +54,7 @@ RUN pip install --no-cache-dir \
     gunicorn==21.2.0 \
     requests==2.31.0 \
     rdkit==2023.3.1 \
-    scipy==1.11.1
+    meeko>=0.7.0
 
 # Set working directory
 WORKDIR /AmberFlow
@@ -65,8 +66,8 @@ COPY . .
 RUN mkdir -p /AmberFlow/obsolete /AmberFlow/pdb /AmberFlow/temp /AmberFlow/output && \
     chmod -R 777 /AmberFlow
 
-# Make sure the python directory is in the Python path
-ENV PYTHONPATH="${PYTHONPATH}:/AmberFlow/python"
+# Make sure the amberflow package is on the Python path
+ENV PYTHONPATH="${PYTHONPATH}:/AmberFlow"
 
 # Expose the port
 EXPOSE 7860

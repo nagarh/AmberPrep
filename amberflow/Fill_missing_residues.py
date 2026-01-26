@@ -444,12 +444,3 @@ if __name__ == "__main__":
         chains_to_replace,
         original_pdb_path=original_pdb_path,
     )
-    #rebuild_pdb_with_esmfold(
-    #    pdb_id,
-    #    ['B', 'C'],
-    #    original_pdb_path=original_pdb_path,
-    #                            )
-
-
-
-

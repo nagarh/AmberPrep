@@ -719,11 +719,11 @@ class MDSimulationPipeline {
                     addIonsSelect.value = 'None';
                 }
 
-                // Show detailed results
-                alert(`✅ System Charge Analysis Complete!\n\n` +
-                      `Net Charge: ${result.net_charge}\n` +
-                      `Recommendation: ${result.suggestion}\n` +
-                      `Ligand Present: ${result.ligand_present ? 'Yes' : 'No'}`);
+                // Show results in plain language (no raw decimal like 3.999)
+                const chargeDesc = result.net_charge > 0 ? 'Positive' : result.net_charge < 0 ? 'Negative' : 'Neutral';
+                alert(`✅ System Charge\n\n` +
+                      `Charge: ${chargeDesc}\n` +
+                      `${result.suggestion}`);
             } else {
                 alert(`❌ Error: ${result.error}`);
             }
@@ -6080,60 +6080,28 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 defaultRepresentation: false
             });
 
-            // Get chains from completed structure - parse from PDB content or use original chains
+            // Get chains from completed structure for toggle fallback
             const completedChains = [];
-            
-            // Method 1: Parse chain IDs from PDB content
             const chainSet = new Set();
             const lines = completedText.split('\n');
             for (const line of lines) {
                 if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
-                    const chainId = line.charAt(21); // Chain ID is at position 21
-                    if (chainId && chainId.trim() !== '') {
-                        chainSet.add(chainId);
-                    }
+                    const chainId = line.charAt(21);
+                    if (chainId && chainId.trim() !== '') chainSet.add(chainId);
                 }
             }
             completedChains.push(...Array.from(chainSet).sort());
-            
-            // Method 2: Fallback to original structure chains if parsing didn't work
             if (completedChains.length === 0 && this.currentProtein && this.currentProtein.chains) {
                 completedChains.push(...this.currentProtein.chains);
             }
-            
-            // Use a different color scheme for completed structure
-            const completedColors = {
-                'A': 'orange',
-                'B': 'purple',
-                'C': 'pink',
-                'D': 'cyan',
-                'E': 'yellow',
-                'F': 'magenta',
-                'G': 'lime',
-                'H': 'coral'
-            };
-
-            if (completedChains.length > 0) {
-                completedChains.forEach((chain, index) => {
-                    // Use different colors for completed structure
-                    const color = completedColors[chain] || `hsl(${(index * 60) % 360}, 70%, 50%)`;
-                    completedComponent.addRepresentation("cartoon", {
-                        sele: `:${chain}`,
-                        color: color,
-                        opacity: 0.7
-                    });
-                });
-            } else {
-                // Fallback: use chainid color scheme if we can't determine chains
-                completedComponent.addRepresentation("cartoon", {
-                    sele: "protein",
-                    colorScheme: "chainid",
-                    opacity: 0.7
-                });
-            }
-
-            // Store completed chains for later use in toggle functions
             this.completedChains = completedChains;
+
+            // Use a single color for Completed Structure (matches "Completed Structure" label #28a745)
+            completedComponent.addRepresentation("cartoon", {
+                sele: "protein",
+                color: "#28a745",
+                opacity: 0.7
+            });
 
             // Auto-fit the view
             this.superimposedNglStage.autoView();
@@ -6199,45 +6167,12 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 });
             }
 
-            // Completed structure - use stored chains or original chains
-            let completedChains = [];
-            
-            // Try to get from stored completed chains (if we stored them)
-            if (this.completedChains && this.completedChains.length > 0) {
-                completedChains = this.completedChains;
-            } else if (this.currentProtein && this.currentProtein.chains) {
-                // Fallback to original chains
-                completedChains = this.currentProtein.chains;
-            }
-            
-            const completedColors = {
-                'A': 'orange',
-                'B': 'purple',
-                'C': 'pink',
-                'D': 'cyan',
-                'E': 'yellow',
-                'F': 'magenta',
-                'G': 'lime',
-                'H': 'coral'
-            };
-            
-            if (completedChains.length > 0) {
-                completedChains.forEach((chain, index) => {
-                    const color = completedColors[chain] || `hsl(${(index * 60) % 360}, 70%, 50%)`;
-                    this.superimposedCompletedComponent.addRepresentation("surface", {
-                        sele: `:${chain}`,
-                        color: color,
-                        opacity: 0.5
-                    });
-                });
-            } else {
-                // Fallback: use chainid color scheme
-                this.superimposedCompletedComponent.addRepresentation("surface", {
-                    sele: "protein",
-                    colorScheme: "chainid",
-                    opacity: 0.5
-                });
-            }
+            // Completed structure: single color (matches "Completed Structure" label #28a745)
+            this.superimposedCompletedComponent.addRepresentation("surface", {
+                sele: "protein",
+                color: "#28a745",
+                opacity: 0.5
+            });
         } else {
             // Switch to cartoon
             this.superimposedRepresentationType = 'cartoon';
@@ -6263,45 +6198,12 @@ echo "Analysis completed! Results saved in analysis/ directory"
                 });
             }
 
-            // Completed structure - use stored chains or original chains
-            let completedChains = [];
-            
-            // Try to get from stored completed chains (if we stored them)
-            if (this.completedChains && this.completedChains.length > 0) {
-                completedChains = this.completedChains;
-            } else if (this.currentProtein && this.currentProtein.chains) {
-                // Fallback to original chains
-                completedChains = this.currentProtein.chains;
-            }
-            
-            const completedColors = {
-                'A': 'orange',
-                'B': 'purple',
-                'C': 'pink',
-                'D': 'cyan',
-                'E': 'yellow',
-                'F': 'magenta',
-                'G': 'lime',
-                'H': 'coral'
-            };
-            
-            if (completedChains.length > 0) {
-                completedChains.forEach((chain, index) => {
-                    const color = completedColors[chain] || `hsl(${(index * 60) % 360}, 70%, 50%)`;
-                    this.superimposedCompletedComponent.addRepresentation("cartoon", {
-                        sele: `:${chain}`,
-                        color: color,
-                        opacity: 0.7
-                    });
-                });
-            } else {
-                // Fallback: use chainid color scheme
-                this.superimposedCompletedComponent.addRepresentation("cartoon", {
-                    sele: "protein",
-                    colorScheme: "chainid",
-                    opacity: 0.7
-                });
-            }
+            // Completed structure: single color (matches "Completed Structure" label #28a745)
+            this.superimposedCompletedComponent.addRepresentation("cartoon", {
+                sele: "protein",
+                color: "#28a745",
+                opacity: 0.7
+            });
         }
     }
 

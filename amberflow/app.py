@@ -7,6 +7,7 @@ Provides API endpoints for protein processing and file generation
 from flask import Flask, request, jsonify, send_file, render_template, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 import os
+import sys
 import json
 import tempfile
 import zipfile
@@ -18,7 +19,7 @@ from Bio.PDB import PDBParser, PDBList
 import logging
 import html
 from collections import defaultdict
-from structure_preparation import (
+from .structure_preparation import (
     prepare_structure,
     parse_structure_info,
     extract_original_residue_info,
@@ -26,9 +27,7 @@ from structure_preparation import (
     sanity_check_ligand_pdb,
     merge_protein_and_ligand,
 )
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from Fill_missing_residues import (
+from .Fill_missing_residues import (
     get_pdb_id_from_pdb_file,
     detect_missing_residues,
     get_chain_sequences,
@@ -39,18 +38,19 @@ from Fill_missing_residues import (
     trim_chains_sequences
 )
 
-app = Flask(__name__, 
-            template_folder='../html',
-            static_folder='../',
-            static_url_path='')
+_BASE = Path(__file__).parent
+app = Flask(__name__,
+            template_folder=str(_BASE / "html"),
+            static_folder=str(_BASE),
+            static_url_path="")
 CORS(app)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create output directory
-OUTPUT_DIR = Path(__file__).parent.parent / "output"
+# Output directory (cwd/output when run as package)
+OUTPUT_DIR = Path.cwd() / "output"
 
 def clean_and_create_output_folder():
     """Clean existing output folder and create a new one"""
@@ -2076,7 +2076,7 @@ def index():
 @app.route('/<path:filename>')
 def serve_static(filename):
     """Serve static files (CSS, JS, etc.)"""
-    return send_from_directory('../', filename)
+    return send_from_directory(str(_BASE), filename)
 
 @app.route('/api/prepare-structure', methods=['POST'])
 def prepare_structure_endpoint():
@@ -3457,17 +3457,17 @@ def calculate_net_charge():
         if net_charge is None:
             return jsonify({'error': 'Could not extract net charge from tleap output'}), 500
         
-        # Suggest ion addition
+        # Suggest ion addition (plain-language message)
         if net_charge > 0:
-            suggestion = f"Add {int(net_charge)} Cl- ions to neutralize the system"
+            suggestion = "The system is positively charged. Add Cl- to neutralize."
             ion_type = "Cl-"
-            ion_count = int(net_charge)
+            ion_count = int(round(net_charge))
         elif net_charge < 0:
-            suggestion = f"Add {int(abs(net_charge))} Na+ ions to neutralize the system"
+            suggestion = "The system is negatively charged. Add Na+ to neutralize."
             ion_type = "Na+"
-            ion_count = int(abs(net_charge))
+            ion_count = int(round(abs(net_charge)))
         else:
-            suggestion = "System is already neutral, no ions needed"
+            suggestion = "The system is neutral. No ions needed."
             ion_type = "None"
             ion_count = 0
         
@@ -4657,8 +4657,8 @@ def build_completed_structure_endpoint():
 import sys
 import os
 
-# Add python directory to path (Fill_missing_residues is in python/)
-sys.path.insert(0, r'{str(Path(__file__).parent.parent / "python")}')
+# Add amberflow package to path (Fill_missing_residues is in amberflow/)
+sys.path.insert(0, r'{str(Path(__file__).parent)}')
 
 # Change to output directory
 os.chdir(r'{str(OUTPUT_DIR)}')
